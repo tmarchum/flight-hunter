@@ -64,7 +64,7 @@ create table if not exists settings (
 -- הגדרות ברירת מחדל
 insert into settings (key, value) values
   ('serpapi_key', ''),
-  ('kiwi_key', ''),
+  ('skyfare_key', ''),
   ('claude_key', ''),
   ('green_instance', ''),
   ('green_token', ''),

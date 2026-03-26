@@ -195,7 +195,7 @@ const Landing = ({go}) => (
     <div style={{textAlign:'center',padding:'80px 16px 48px'}}>
       <div style={{display:'inline-block',background:'#f5a62320',color:'#f5a623',padding:'8px 16px',borderRadius:20,fontSize:13,fontWeight:500,marginBottom:24}}>AI סורק 3 מנועי חיפוש + משווה אוטומטית</div>
       <h1 style={{fontSize:'clamp(36px,7vw,64px)',fontWeight:900,lineHeight:1.1,margin:'0 0 20px'}}>מצאת מחיר לטיסה?<br/><span style={{color:'#f5a623'}}>אנחנו נמצא לך זול יותר</span></h1>
-      <p style={{color:'#6b7280',fontSize:18,maxWidth:550,margin:'0 auto 40px'}}>Google Flights + Kiwi + Amadeus — AI משווה ושולח לך את הדיל ישירות לוואטסאפ תוך שעה</p>
+      <p style={{color:'#6b7280',fontSize:18,maxWidth:550,margin:'0 auto 40px'}}>Google Flights + Skyscanner + Kiwi + Trip.com — AI משווה ושולח לך את הדיל ישירות לוואטסאפ תוך שעה</p>
       <div style={{display:'flex',flexWrap:'wrap',justifyContent:'center',gap:24,color:'#6b7280',fontSize:14,marginBottom:56}}>
         {['1,200+ לקוחות','חסכנו ₪2.1M','ממוצע חיסכון ₪487','תוצאות תוך שעה'].map(t=><span key={t}>✓ {t}</span>)}
       </div>
@@ -270,7 +270,7 @@ const FlightForm = ({type, go}) => {
       }
       // Trigger Make.com search webhook
       if (settings.webhook_search) {
-        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id, serpapi_key:settings.serpapi_key, kiwi_key:settings.kiwi_key, claude_key:settings.claude_key, green_instance:settings.green_instance, green_token:settings.green_token})}); } catch(e){}
+        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id, serpapi_key:settings.serpapi_key, skyfare_key:settings.skyfare_key, claude_key:settings.claude_key, green_instance:settings.green_instance, green_token:settings.green_token})}); } catch(e){}
       }
     }
     setLoading(false);
@@ -498,8 +498,8 @@ const Admin = ({go}) => {
       <div style={{maxWidth:600,margin:'32px auto',padding:'0 16px'}}>
         <h2 style={{fontSize:24,fontWeight:900,marginBottom:24}}>⚙️ הגדרות API</h2>
         {[
-          {key:'serpapi_key',label:'SerpApi Key',desc:'serpapi.com → My Account → API Key'},
-          {key:'kiwi_key',label:'Kiwi Tequila Key',desc:'tequila.kiwi.com → API Key'},
+          {key:'serpapi_key',label:'SerpApi Key (Google Flights)',desc:'serpapi.com → My Account → API Key'},
+          {key:'skyfare_key',label:'SkyFare / RapidAPI Key',desc:'rapidapi.com → SkyFare API → X-RapidAPI-Key'},
           {key:'claude_key',label:'Claude API Key',desc:'console.anthropic.com → API Keys'},
           {key:'green_instance',label:'Green API Instance ID',desc:'green-api.com → Instance ID'},
           {key:'green_token',label:'Green API Token',desc:'green-api.com → API Token'},
