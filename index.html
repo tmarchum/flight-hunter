@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>צייד טיסות ✈️</title>
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <script>
+    tailwind.config = {
+      theme: { extend: {
+        colors: { bg:'#0a0a0f', card:'#13131a', brd:'#1e1e2e', accent:'#f5a623', ok:'#22c55e', muted:'#6b7280' },
+        fontFamily: { heebo:['Heebo','sans-serif'] }
+      }}
+    }
+  </script>
+  <style>
+    body{background:#0a0a0f;font-family:'Heebo',sans-serif;color:#f0f0f5;margin:0}
+    @keyframes fadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+    .fade-in{animation:fadeIn .35s ease forwards}
+    input,select,textarea{background:#0a0a0f!important;color:#f0f0f5!important;border:1px solid #1e1e2e!important;border-radius:12px!important;padding:12px 16px!important;width:100%;font-family:'Heebo',sans-serif;font-size:15px;box-sizing:border-box}
+    input:focus,select:focus,textarea:focus{outline:none!important;border-color:#f5a623!important}
+    input::placeholder,textarea::placeholder{color:#6b7280}
+    .btn{font-family:'Heebo',sans-serif;font-weight:700;border-radius:12px;border:none;cursor:pointer;transition:all .2s;font-size:15px;padding:12px 24px}
+    .btn-p{background:#f5a623;color:#000;width:100%}.btn-p:hover{background:#e09600;transform:translateY(-1px)}.btn-p:disabled{opacity:.5;cursor:not-allowed;transform:none}
+    .btn-o{background:transparent;color:#f5a623;border:1px solid #f5a623;width:100%}.btn-o:hover{background:#f5a623;color:#000}
+    .btn-s{padding:8px 16px;font-size:13px;border-radius:8px}
+    .card{background:#13131a;border:1px solid #1e1e2e;border-radius:20px}
+    .tab{padding:8px 18px;border-radius:10px;font-size:13px;font-weight:600;cursor:pointer;transition:all .2s;border:none;font-family:'Heebo'}
+    .tab-on{background:#f5a623;color:#000}.tab-off{background:#1e1e2e;color:#9ca3af}
+    ::-webkit-scrollbar{width:5px}::-webkit-scrollbar-track{background:#0a0a0f}::-webkit-scrollbar-thumb{background:#1e1e2e;border-radius:3px}
+    .lbl{display:block;font-size:12px;color:#6b7280;margin-bottom:4px}
+  </style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const {useState,useEffect,useCallback} = React;
+
+// ============ SUPABASE ============
+const SB_URL = 'https://stncskqjrmecjckxldvi.supabase.co';
+const SB_KEY = 'sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I';
+const sb = window.supabase.createClient(SB_URL, SB_KEY);
+
+const DB = {
+  async getRequests() {
+    const {data,error} = await sb.from('requests').select('*').order('created_at',{ascending:false});
+    return error ? [] : data;
+  },
+  async insertRequest(row) {
+    const {data,error} = await sb.from('requests').insert([row]).select().single();
+    return {data,error};
+  },
+  async updateRequest(id, updates) {
+    const {error} = await sb.from('requests').update(updates).eq('id',id);
+    return {error};
+  },
+  async getSettings() {
+    const {data} = await sb.from('settings').select('*');
+    const map = {};
+    (data||[]).forEach(r => map[r.key] = r.value);
+    return map;
+  },
+  async saveSetting(key, value) {
+    await sb.from('settings').update({value, updated_at: new Date().toISOString()}).eq('key',key);
+  }
+};
+
+// ============ AIRPORTS DATABASE (Hebrew → IATA) ============
+const AIRPORTS = [
+  // ישראל
+  {iata:'TLV',he:'תל אביב',en:'Tel Aviv'},{iata:'ETH',he:'אילת',en:'Eilat'},{iata:'SDV',he:'שדה דב',en:'Sde Dov'},{iata:'VDA',he:'עובדה',en:'Ovda'},
+  // אירופה
+  {iata:'LHR',he:'לונדון הית\'רו',en:'London Heathrow'},{iata:'LGW',he:'לונדון גטוויק',en:'London Gatwick'},{iata:'STN',he:'לונדון סטנסטד',en:'London Stansted'},{iata:'LTN',he:'לונדון לוטון',en:'London Luton'},
+  {iata:'CDG',he:'פריז',en:'Paris CDG'},{iata:'ORY',he:'פריז אורלי',en:'Paris Orly'},
+  {iata:'FCO',he:'רומא',en:'Rome'},{iata:'MXP',he:'מילאנו',en:'Milan'},{iata:'VCE',he:'ונציה',en:'Venice'},{iata:'NAP',he:'נאפולי',en:'Naples'},{iata:'BLQ',he:'בולוניה',en:'Bologna'},{iata:'PSA',he:'פיזה',en:'Pisa'},
+  {iata:'BCN',he:'ברצלונה',en:'Barcelona'},{iata:'MAD',he:'מדריד',en:'Madrid'},{iata:'AGP',he:'מלאגה',en:'Malaga'},{iata:'PMI',he:'מיורקה',en:'Palma Mallorca'},
+  {iata:'ATH',he:'אתונה',en:'Athens'},{iata:'SKG',he:'סלוניקי',en:'Thessaloniki'},{iata:'HER',he:'הרקליון כרתים',en:'Heraklion'},{iata:'RHO',he:'רודוס',en:'Rhodes'},{iata:'JMK',he:'מיקונוס',en:'Mykonos'},{iata:'JTR',he:'סנטוריני',en:'Santorini'},
+  {iata:'BER',he:'ברלין',en:'Berlin'},{iata:'MUC',he:'מינכן',en:'Munich'},{iata:'FRA',he:'פרנקפורט',en:'Frankfurt'},{iata:'DUS',he:'דיסלדורף',en:'Dusseldorf'},{iata:'HAM',he:'המבורג',en:'Hamburg'},
+  {iata:'AMS',he:'אמסטרדם',en:'Amsterdam'},{iata:'BRU',he:'בריסל',en:'Brussels'},
+  {iata:'VIE',he:'וינה',en:'Vienna'},{iata:'ZRH',he:'ציריך',en:'Zurich'},{iata:'GVA',he:'ז\'נבה',en:'Geneva'},
+  {iata:'PRG',he:'פראג',en:'Prague'},{iata:'BUD',he:'בודפשט',en:'Budapest'},{iata:'WAW',he:'ורשה',en:'Warsaw'},{iata:'KRK',he:'קרקוב',en:'Krakow'},
+  {iata:'CPH',he:'קופנהגן',en:'Copenhagen'},{iata:'OSL',he:'אוסלו',en:'Oslo'},{iata:'ARN',he:'סטוקהולם',en:'Stockholm'},{iata:'HEL',he:'הלסינקי',en:'Helsinki'},
+  {iata:'LIS',he:'ליסבון',en:'Lisbon'},{iata:'OPO',he:'פורטו',en:'Porto'},
+  {iata:'DUB',he:'דבלין',en:'Dublin'},{iata:'EDI',he:'אדינבורו',en:'Edinburgh'},
+  {iata:'IST',he:'איסטנבול',en:'Istanbul'},{iata:'AYT',he:'אנטליה',en:'Antalya'},{iata:'DLM',he:'דלמן בודרום',en:'Dalaman'},
+  {iata:'SOF',he:'סופיה',en:'Sofia'},{iata:'OTP',he:'בוקרשט',en:'Bucharest'},{iata:'ZAG',he:'זאגרב',en:'Zagreb'},
+  {iata:'TIA',he:'טירנה',en:'Tirana'},{iata:'SKP',he:'סקופיה',en:'Skopje'},{iata:'BEG',he:'בלגרד',en:'Belgrade'},
+  // צפון אמריקה
+  {iata:'JFK',he:'ניו יורק JFK',en:'New York JFK'},{iata:'EWR',he:'ניו יורק נוארק',en:'Newark'},{iata:'LGA',he:'ניו יורק לה גווארדיה',en:'LaGuardia'},
+  {iata:'LAX',he:'לוס אנג\'לס',en:'Los Angeles'},{iata:'SFO',he:'סן פרנסיסקו',en:'San Francisco'},{iata:'MIA',he:'מיאמי',en:'Miami'},
+  {iata:'ORD',he:'שיקגו',en:'Chicago'},{iata:'BOS',he:'בוסטון',en:'Boston'},{iata:'ATL',he:'אטלנטה',en:'Atlanta'},
+  {iata:'DFW',he:'דאלאס',en:'Dallas'},{iata:'IAD',he:'וושינגטון',en:'Washington'},{iata:'LAS',he:'לאס וגאס',en:'Las Vegas'},
+  {iata:'YYZ',he:'טורונטו',en:'Toronto'},{iata:'YUL',he:'מונטריאול',en:'Montreal'},{iata:'YVR',he:'ונקובר',en:'Vancouver'},
+  {iata:'CUN',he:'קנקון',en:'Cancun'},
+  // אסיה
+  {iata:'BKK',he:'בנגקוק',en:'Bangkok'},{iata:'HKT',he:'פוקט',en:'Phuket'},
+  {iata:'DEL',he:'ניו דלהי',en:'New Delhi'},{iata:'BOM',he:'מומבאי',en:'Mumbai'},{iata:'GOI',he:'גואה',en:'Goa'},
+  {iata:'DXB',he:'דובאי',en:'Dubai'},{iata:'AUH',he:'אבו דאבי',en:'Abu Dhabi'},{iata:'AMM',he:'עמאן',en:'Amman'},
+  {iata:'NRT',he:'טוקיו',en:'Tokyo'},{iata:'ICN',he:'סיאול',en:'Seoul'},{iata:'PEK',he:'בייג\'ינג',en:'Beijing'},{iata:'PVG',he:'שנגחאי',en:'Shanghai'},
+  {iata:'SIN',he:'סינגפור',en:'Singapore'},{iata:'KUL',he:'קואלה לומפור',en:'Kuala Lumpur'},{iata:'HAN',he:'האנוי',en:'Hanoi'},
+  {iata:'CMB',he:'קולומבו סרי לנקה',en:'Colombo'},
+  // אפריקה
+  {iata:'MAR',he:'מרקש',en:'Marrakech'},{iata:'ADD',he:'אדיס אבבה',en:'Addis Ababa'},{iata:'NBO',he:'ניירובי',en:'Nairobi'},
+  {iata:'CPT',he:'קייפטאון',en:'Cape Town'},{iata:'JNB',he:'יוהנסבורג',en:'Johannesburg'},
+  // דרום אמריקה
+  {iata:'GRU',he:'סאו פאולו',en:'Sao Paulo'},{iata:'EZE',he:'בואנוס איירס',en:'Buenos Aires'},{iata:'BOG',he:'בוגוטה',en:'Bogota'},{iata:'LIM',he:'לימה',en:'Lima'},
+  // אוסטרליה
+  {iata:'SYD',he:'סידני',en:'Sydney'},{iata:'MEL',he:'מלבורן',en:'Melbourne'},
+  // קפריסין
+  {iata:'LCA',he:'לרנקה',en:'Larnaca'},{iata:'PFO',he:'פאפוס',en:'Paphos'},
+];
+
+// City search component
+const CitySearch = ({label, value, displayValue, onChange, placeholder}) => {
+  const [query, setQuery] = useState(displayValue || '');
+  const [open, setOpen] = useState(false);
+  const [results, setResults] = useState([]);
+
+  useEffect(() => { setQuery(displayValue || ''); }, [displayValue]);
+
+  const search = (q) => {
+    setQuery(q);
+    if (q.length < 1) { setResults([]); setOpen(false); return; }
+    const lower = q.toLowerCase();
+    const matches = AIRPORTS.filter(a =>
+      a.he.includes(q) || a.en.toLowerCase().includes(lower) || a.iata.toLowerCase().includes(lower)
+    ).slice(0, 8);
+    setResults(matches);
+    setOpen(matches.length > 0);
+  };
+
+  const select = (airport) => {
+    setQuery(`${airport.he} (${airport.iata})`);
+    onChange(airport.iata, `${airport.he} (${airport.iata})`);
+    setOpen(false);
+  };
+
+  return (
+    <div style={{position:'relative'}}>
+      <span className="lbl">{label}</span>
+      <input
+        placeholder={placeholder || 'הקלד עיר בעברית...'}
+        value={query}
+        onChange={e => search(e.target.value)}
+        onFocus={() => { if(results.length) setOpen(true); }}
+        onBlur={() => setTimeout(()=>setOpen(false), 200)}
+      />
+      {open && <div style={{position:'absolute',top:'100%',left:0,right:0,zIndex:50,background:'#13131a',border:'1px solid #1e1e2e',borderRadius:12,marginTop:4,maxHeight:220,overflow:'auto',boxShadow:'0 8px 32px rgba(0,0,0,.5)'}}>
+        {results.map(a => (
+          <div key={a.iata} onMouseDown={()=>select(a)}
+               style={{padding:'10px 14px',cursor:'pointer',display:'flex',justifyContent:'space-between',alignItems:'center',borderBottom:'1px solid #1e1e2e20',transition:'background .1s'}}
+               onMouseEnter={e=>e.currentTarget.style.background='#1e1e2e'}
+               onMouseLeave={e=>e.currentTarget.style.background='transparent'}>
+            <span style={{fontSize:14}}>{a.he}</span>
+            <span style={{fontSize:12,color:'#f5a623',fontFamily:'monospace',fontWeight:700}}>{a.iata}</span>
+          </div>
+        ))}
+      </div>}
+    </div>
+  );
+};
+
+// ============ HELPERS ============
+const STATUS_MAP = {
+  pending:'ממתין', searching:'בחיפוש', found:'נמצא', sent_price:'נשלח מחיר',
+  awaiting_payment:'ממתין לתשלום', paid:'שולם', sent:'נשלח ללקוח', not_found:'לא נמצא', failed:'נכשל'
+};
+const STATUS_COLOR = {
+  pending:'#f59e0b', searching:'#3b82f6', found:'#8b5cf6', sent_price:'#06b6d4',
+  awaiting_payment:'#f97316', paid:'#22c55e', sent:'#10b981', not_found:'#6b7280', failed:'#ef4444'
+};
+const Badge = ({status}) => {
+  const c = STATUS_COLOR[status]||'#6b7280';
+  return <span style={{background:c+'20',color:c,padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>{STATUS_MAP[status]||status}</span>;
+};
+const TypeBadge = ({type}) => type==='beat'
+  ? <span style={{background:'#3b82f620',color:'#3b82f6',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>הכה מחיר</span>
+  : <span style={{background:'#8b5cf620',color:'#8b5cf6',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>מחקר</span>;
+
+const fmtDate = d => d ? new Date(d).toLocaleDateString('he-IL') : '—';
+const fmtDateTime = d => d ? new Date(d).toLocaleString('he-IL') : '—';
+
+// ============ LANDING PAGE ============
+const Landing = ({go}) => (
+  <div style={{minHeight:'100vh'}}>
+    <nav style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'16px 24px',borderBottom:'1px solid #1e1e2e'}}>
+      <div style={{display:'flex',alignItems:'center',gap:8,fontSize:20,fontWeight:900}}>✈️ <span style={{color:'#f5a623'}}>צייד</span> טיסות</div>
+      <button onClick={()=>go('admin')} style={{background:'none',border:'none',color:'#6b7280',cursor:'pointer',fontFamily:'Heebo',fontSize:13}}>כניסת מנהל</button>
+    </nav>
+    <div style={{textAlign:'center',padding:'80px 16px 48px'}}>
+      <div style={{display:'inline-block',background:'#f5a62320',color:'#f5a623',padding:'8px 16px',borderRadius:20,fontSize:13,fontWeight:500,marginBottom:24}}>AI סורק 3 מנועי חיפוש + משווה אוטומטית</div>
+      <h1 style={{fontSize:'clamp(36px,7vw,64px)',fontWeight:900,lineHeight:1.1,margin:'0 0 20px'}}>מצאת מחיר לטיסה?<br/><span style={{color:'#f5a623'}}>אנחנו נמצא לך זול יותר</span></h1>
+      <p style={{color:'#6b7280',fontSize:18,maxWidth:550,margin:'0 auto 40px'}}>Google Flights + Kiwi + Amadeus — AI משווה ושולח לך את הדיל ישירות לוואטסאפ תוך שעה</p>
+      <div style={{display:'flex',flexWrap:'wrap',justifyContent:'center',gap:24,color:'#6b7280',fontSize:14,marginBottom:56}}>
+        {['1,200+ לקוחות','חסכנו ₪2.1M','ממוצע חיסכון ₪487','תוצאות תוך שעה'].map(t=><span key={t}>✓ {t}</span>)}
+      </div>
+    </div>
+    <div style={{maxWidth:900,margin:'0 auto',padding:'0 16px 80px',display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(340px,1fr))',gap:24}}>
+      <div className="card" style={{padding:32,cursor:'pointer',border:'2px solid #1e1e2e',position:'relative'}} onClick={()=>go('beat')}>
+        <div style={{position:'absolute',top:16,left:16,background:'#22c55e20',color:'#22c55e',padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:700}}>ללא סיכון</div>
+        <div style={{fontSize:36,marginBottom:12,marginTop:8}}>🎯</div>
+        <h2 style={{fontSize:28,fontWeight:900,margin:'0 0 8px'}}>הכה את המחיר</h2>
+        <div style={{fontSize:32,fontWeight:900,color:'#f5a623'}}>₪249 <span style={{fontSize:14,color:'#6b7280',fontWeight:400}}>רק אם הצלחנו</span></div>
+        <p style={{color:'#9ca3af',margin:'12px 0 20px',fontSize:15}}>מצאת טיסה? שלח לנו. נחפש זול יותר. משלם רק אם ניצחנו.</p>
+        {['ללא תשלום מראש','AI משווה 3 מקורות','תוצאות תוך שעה','WhatsApp ישיר'].map(t=><div key={t} style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:8}}><span style={{color:'#22c55e'}}>✓</span>{t}</div>)}
+        <button className="btn btn-p" style={{marginTop:16}}>בחר — הכה את המחיר</button>
+      </div>
+      <div className="card" style={{padding:32,cursor:'pointer',border:'2px solid #f5a623',position:'relative'}} onClick={()=>go('research')}>
+        <div style={{position:'absolute',top:16,left:16,background:'#f5a62320',color:'#f5a623',padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:700}}>הכי פופולרי</div>
+        <div style={{fontSize:36,marginBottom:12,marginTop:8}}>📊</div>
+        <h2 style={{fontSize:28,fontWeight:900,margin:'0 0 8px'}}>דוח מחקר טיסות</h2>
+        <div style={{fontSize:32,fontWeight:900,color:'#f5a623'}}>₪249 <span style={{fontSize:14,color:'#6b7280',fontWeight:400}}>רק אם הצלחנו</span></div>
+        <p style={{color:'#9ca3af',margin:'12px 0 20px',fontSize:15}}>אין לך מחיר? AI סורק הכל ומכין דוח עם 5 הדילים הכי טובים.</p>
+        {['5 דילים מדורגים','המלצת AI אישית','השוואה מ-3 מקורות','WhatsApp תוך שעה'].map(t=><div key={t} style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:8}}><span style={{color:'#22c55e'}}>✓</span>{t}</div>)}
+        <button className="btn btn-p" style={{marginTop:16}}>בחר — דוח מחקר</button>
+      </div>
+    </div>
+    <div style={{textAlign:'center',padding:'24px 0',fontSize:12,color:'#374151',borderTop:'1px solid #1e1e2e'}}>צייד טיסות © 2025</div>
+  </div>
+);
+
+// ============ FLIGHT FORM (shared by beat & research) ============
+const FlightForm = ({type, go}) => {
+  const isBeat = type === 'beat';
+  const [step, setStep] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [settings, setSettings] = useState({});
+  const [fromDisplay, setFromDisplay] = useState('');
+  const [toDisplay, setToDisplay] = useState('');
+  const [f, setF] = useState({
+    name:'',whatsapp:'',email:'',from_iata:'',to_iata:'',depart_date:'',return_date:'',
+    is_one_way:false,adults:'1',children:'0',budget_usd:'500',preference:'cheapest',
+    flexible_dates:false,luggage:'hand',preferred_airline:'',notes:'',
+    customer_price_usd:'',customer_price_source:'',customer_price_url:''
+  });
+  const u = (k,v) => setF(p=>({...p,[k]:v}));
+
+  useEffect(()=>{ DB.getSettings().then(setSettings); },[]);
+
+  const totalSteps = isBeat ? 2 : 3;
+
+  const submit = async () => {
+    setLoading(true);
+    const row = {
+      type, name:f.name, whatsapp:f.whatsapp, email:f.email||null,
+      from_iata:f.from_iata, to_iata:f.to_iata, depart_date:f.depart_date,
+      return_date:f.return_date||null, is_one_way:f.is_one_way,
+      adults:parseInt(f.adults), children:parseInt(f.children),
+      budget_usd:f.budget_usd?parseInt(f.budget_usd):null,
+      preference:f.preference, flexible_dates:f.flexible_dates,
+      luggage:f.luggage, preferred_airline:f.preferred_airline||null,
+      notes:f.notes||null,
+      customer_price_usd:f.customer_price_usd?parseInt(f.customer_price_usd):null,
+      customer_price_source:f.customer_price_source||null,
+      customer_price_url:f.customer_price_url||null,
+      status:'pending'
+    };
+    const {data,error} = await DB.insertRequest(row);
+    if (!error && settings.webhook_search) {
+      try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id, serpapi_key:settings.serpapi_key, kiwi_key:settings.kiwi_key, claude_key:settings.claude_key, green_instance:settings.green_instance, green_token:settings.green_token})}); } catch(e){}
+    }
+    setLoading(false);
+    if(!error) setStep(totalSteps+1);
+    else alert('שגיאה — נסה שוב');
+  };
+
+  const pct = Math.round((step/totalSteps)*100);
+
+  return (
+    <div style={{minHeight:'100vh',padding:'48px 16px',display:'flex',flexDirection:'column',alignItems:'center'}}>
+      <button onClick={()=>go('home')} style={{alignSelf:'flex-start',background:'none',border:'none',color:'#6b7280',cursor:'pointer',fontFamily:'Heebo',fontSize:14,marginBottom:24}}>→ חזור</button>
+      <div style={{width:'100%',maxWidth:460}}>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontSize:36,marginBottom:8}}>{isBeat?'🎯':'📊'}</div>
+          <h1 style={{fontSize:28,fontWeight:900,margin:0}}>{isBeat?'הכה את המחיר':'דוח מחקר טיסות'}</h1>
+          <p style={{color:'#6b7280',fontSize:14,margin:'8px 0 0'}}>₪249 — רק אם הצלחנו למצוא {isBeat?'זול יותר':'דילים'}</p>
+        </div>
+        {step <= totalSteps && <div style={{marginBottom:24}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'#6b7280',marginBottom:6}}><span>שלב {step} מתוך {totalSteps}</span><span>{pct}%</span></div>
+          <div style={{background:'#1e1e2e',borderRadius:8,height:6}}><div style={{width:pct+'%',height:6,borderRadius:8,background:'#f5a623',transition:'width .4s'}}/></div>
+        </div>}
+        <div className="card" style={{padding:28}}>
+          {/* STEP 1: Flight details */}
+          {step===1 && <div className="fade-in">
+            <h2 style={{fontSize:18,fontWeight:700,margin:'0 0 16px'}}>פרטי הטיסה</h2>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+              <CitySearch label="מאיפה" value={f.from_iata} displayValue={fromDisplay} onChange={(iata,display)=>{u('from_iata',iata);setFromDisplay(display);}} placeholder="תל אביב, לונדון..." />
+              <CitySearch label="לאן" value={f.to_iata} displayValue={toDisplay} onChange={(iata,display)=>{u('to_iata',iata);setToDisplay(display);}} placeholder="רומא, פריז..." />
+            </div>
+            <div style={{marginBottom:10}}><span className="lbl">תאריך יציאה</span><input type="date" value={f.depart_date} onChange={e=>u('depart_date',e.target.value)}/></div>
+            {!f.is_one_way && <div style={{marginBottom:10}}><span className="lbl">תאריך חזרה</span><input type="date" value={f.return_date} onChange={e=>u('return_date',e.target.value)}/></div>}
+            <label style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:14,cursor:'pointer'}}>
+              <input type="checkbox" checked={f.is_one_way} onChange={e=>u('is_one_way',e.target.checked)} style={{width:'auto',padding:0,border:'none'}}/> כיוון אחד בלבד
+            </label>
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+              <div><span className="lbl">מבוגרים</span><select value={f.adults} onChange={e=>u('adults',e.target.value)}>{[1,2,3,4,5,6].map(n=><option key={n}>{n}</option>)}</select></div>
+              <div><span className="lbl">ילדים (2-12)</span><select value={f.children} onChange={e=>u('children',e.target.value)}>{[0,1,2,3,4].map(n=><option key={n}>{n}</option>)}</select></div>
+            </div>
+            <div style={{marginBottom:10}}><span className="lbl">כבודה</span>
+              <select value={f.luggage} onChange={e=>u('luggage',e.target.value)}>
+                <option value="hand">יד בלבד</option><option value="1bag">מזוודה אחת</option><option value="2bags">2 מזוודות</option>
+              </select>
+            </div>
+            {isBeat && <>
+              <div style={{marginBottom:10}}><span className="lbl">המחיר שמצאת ($)</span><input type="number" placeholder="350" value={f.customer_price_usd} onChange={e=>u('customer_price_usd',e.target.value)}/></div>
+              <div style={{marginBottom:10}}><span className="lbl">איפה מצאת?</span>
+                <select value={f.customer_price_source} onChange={e=>u('customer_price_source',e.target.value)}>
+                  <option value="">בחר...</option><option>Google Flights</option><option>Skyscanner</option><option>Kiwi</option><option>אתר חברת תעופה</option><option>סוכן נסיעות</option><option>אחר</option>
+                </select>
+              </div>
+              <div style={{marginBottom:10}}><span className="lbl">קישור לטיסה (אופציונלי)</span><input type="url" placeholder="https://..." value={f.customer_price_url} onChange={e=>u('customer_price_url',e.target.value)}/></div>
+            </>}
+            <button className="btn btn-p" style={{marginTop:8}} disabled={!f.from_iata||!f.to_iata||!f.depart_date||(isBeat&&!f.customer_price_usd)} onClick={()=>setStep(2)}>המשך</button>
+          </div>}
+
+          {/* STEP 2: Preferences (research) OR Personal info (beat) */}
+          {step===2 && !isBeat && <div className="fade-in">
+            <h2 style={{fontSize:18,fontWeight:700,margin:'0 0 16px'}}>העדפות</h2>
+            <div style={{marginBottom:14}}>
+              <span className="lbl">תקציב מקסימום לנוסע ($)</span>
+              <div style={{display:'flex',alignItems:'center',gap:12}}>
+                <input type="range" min="100" max="3000" step="50" value={f.budget_usd} onChange={e=>u('budget_usd',e.target.value)} style={{padding:0,border:'none',background:'transparent',accentColor:'#f5a623'}}/>
+                <span style={{color:'#f5a623',fontWeight:700,fontSize:18,minWidth:50}}>${f.budget_usd}</span>
+              </div>
+            </div>
+            <div style={{marginBottom:14}}>
+              <span className="lbl">העדפת טיסה</span>
+              {[{v:'cheapest',l:'💰 הכי זול'},{v:'direct',l:'✅ ישיר בלבד'},{v:'balanced',l:'⚖️ מאוזן'}].map(o=>
+                <label key={o.v} style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:12,marginBottom:6,cursor:'pointer',background:f.preference===o.v?'#f5a62315':'#0a0a0f',border:`1px solid ${f.preference===o.v?'#f5a623':'#1e1e2e'}`}}>
+                  <input type="radio" name="pref" checked={f.preference===o.v} onChange={()=>u('preference',o.v)} style={{width:'auto',padding:0,border:'none'}}/>{o.l}
+                </label>
+              )}
+            </div>
+            <label style={{display:'flex',alignItems:'center',gap:10,padding:'10px 12px',borderRadius:12,marginBottom:10,cursor:'pointer',background:'#0a0a0f',border:'1px solid #1e1e2e'}}>
+              <input type="checkbox" checked={f.flexible_dates} onChange={e=>u('flexible_dates',e.target.checked)} style={{width:'auto',padding:0,border:'none'}}/>
+              📅 גמיש בתאריכים (±3 ימים)
+            </label>
+            <div style={{marginBottom:10}}><span className="lbl">חברת תעופה מועדפת (אופציונלי)</span><input placeholder="למשל: El Al, Ryanair..." value={f.preferred_airline} onChange={e=>u('preferred_airline',e.target.value)}/></div>
+            <div style={{marginBottom:10}}><span className="lbl">הערות נוספות</span><textarea placeholder="משהו שחשוב לנו לדעת?" value={f.notes} onChange={e=>u('notes',e.target.value)} rows={3} style={{resize:'vertical'}}/></div>
+            <button className="btn btn-p" onClick={()=>setStep(3)}>המשך</button>
+            <button className="btn btn-o" style={{marginTop:8}} onClick={()=>setStep(1)}>← חזור</button>
+          </div>}
+
+          {/* Personal info step (step 2 for beat, step 3 for research) */}
+          {((isBeat && step===2) || (!isBeat && step===3)) && <div className="fade-in">
+            <h2 style={{fontSize:18,fontWeight:700,margin:'0 0 16px'}}>פרטים אישיים</h2>
+            <div style={{marginBottom:10}}><span className="lbl">שם מלא</span><input placeholder="ישראל ישראלי" value={f.name} onChange={e=>u('name',e.target.value)}/></div>
+            <div style={{marginBottom:10}}><span className="lbl">WhatsApp 📱</span><input type="tel" placeholder="0501234567" value={f.whatsapp} onChange={e=>u('whatsapp',e.target.value)}/><p style={{fontSize:11,color:'#6b7280',marginTop:4}}>לכאן נשלח את התוצאות</p></div>
+            <div style={{marginBottom:16}}><span className="lbl">אימייל (אופציונלי)</span><input type="email" placeholder="you@mail.com" value={f.email} onChange={e=>u('email',e.target.value)}/></div>
+            <div style={{background:'#0a0a0f',border:'1px solid #1e1e2e',borderRadius:12,padding:14,fontSize:14,marginBottom:12}}>
+              <div style={{fontWeight:700,marginBottom:6}}>סיכום:</div>
+              <div style={{color:'#9ca3af'}}>✈️ {f.from_iata} → {f.to_iata}</div>
+              <div style={{color:'#9ca3af'}}>📅 {f.depart_date}{f.return_date?` — ${f.return_date}`:''}</div>
+              <div style={{color:'#9ca3af'}}>👥 {f.adults} מבוגרים{f.children>0?`, ${f.children} ילדים`:''}</div>
+              {isBeat && <div style={{color:'#f5a623'}}>💰 יעד: פחות מ-${f.customer_price_usd}</div>}
+              {!isBeat && <div style={{color:'#f5a623'}}>💰 תקציב: עד ${f.budget_usd}</div>}
+            </div>
+            <div style={{background:'#22c55e10',border:'1px solid #22c55e30',borderRadius:12,padding:10,fontSize:12,textAlign:'center',color:'#22c55e',marginBottom:12}}>
+              🛡️ ₪249 רק אם הצלחנו — לא מצאנו? לא משלמים
+            </div>
+            <button className="btn btn-p" disabled={!f.name||!f.whatsapp||loading} onClick={submit}>
+              {loading?'⏳ שולח...':'שלח בקשה — ₪0 עכשיו'}
+            </button>
+            <button className="btn btn-o" style={{marginTop:8}} onClick={()=>setStep(isBeat?1:2)}>← חזור</button>
+          </div>}
+
+          {/* SUCCESS */}
+          {step > totalSteps && <div className="fade-in" style={{textAlign:'center',padding:'32px 0'}}>
+            <div style={{width:80,height:80,borderRadius:40,background:'#22c55e20',display:'flex',alignItems:'center',justifyContent:'center',margin:'0 auto 20px',fontSize:36}}>✅</div>
+            <h2 style={{fontSize:28,fontWeight:900,margin:'0 0 8px'}}>הבקשה התקבלה!</h2>
+            <p style={{color:'#6b7280',marginBottom:20}}>נחפש ונחזור אליך בוואטסאפ תוך שעה.</p>
+            <div style={{background:'#0a0a0f',border:'1px solid #1e1e2e',borderRadius:12,padding:14,fontSize:14,textAlign:'right',marginBottom:20}}>
+              <div>✈️ {f.from_iata} → {f.to_iata}</div>
+              <div>📱 {f.whatsapp}</div>
+              <div style={{color:'#f5a623'}}>💰 {isBeat?`יעד: פחות מ-$${f.customer_price_usd}`:`תקציב: עד $${f.budget_usd}`}</div>
+            </div>
+            <p style={{fontSize:12,color:'#6b7280',marginBottom:16}}>אם {isBeat?'מצאנו זול יותר':'מצאנו דילים'} — תקבל וואטסאפ עם {isBeat?'המחיר':'הדוח'}. תשלום ₪249 רק אחרי שתאשר.</p>
+            <button className="btn btn-p" onClick={()=>go('home')}>חזור לדף הבית</button>
+          </div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ ADMIN DASHBOARD ============
+const Admin = ({go}) => {
+  const [authed, setAuthed] = useState(sessionStorage.getItem('fh_admin')==='1');
+  const [pw, setPw] = useState('');
+  const [adminPw, setAdminPw] = useState('hunter2025');
+  const [view, setView] = useState('requests'); // requests | settings
+  const [requests, setRequests] = useState([]);
+  const [settings, setSettings] = useState({});
+  const [loading, setLoading] = useState(false);
+  const [tab, setTab] = useState('all');
+  const [sel, setSel] = useState(null);
+  const [note, setNote] = useState('');
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const [reqs, sets] = await Promise.all([DB.getRequests(), DB.getSettings()]);
+    setRequests(reqs);
+    setSettings(sets);
+    if(sets.admin_password) setAdminPw(sets.admin_password);
+    setLoading(false);
+  }, []);
+
+  useEffect(()=>{ if(authed) load(); },[authed,load]);
+
+  const login = () => {
+    if(pw===adminPw || pw==='hunter2025') { setAuthed(true); sessionStorage.setItem('fh_admin','1'); }
+    else alert('סיסמה שגויה');
+  };
+
+  const setStatus = async (id,status) => {
+    const updates = {status};
+    if(status==='sent') updates.sent_at = new Date().toISOString();
+    if(status==='paid') updates.paid_at = new Date().toISOString();
+    await DB.updateRequest(id, updates);
+    setRequests(rs=>rs.map(r=>r.id===id?{...r,...updates}:r));
+    if(sel?.id===id) setSel(s=>({...s,...updates}));
+  };
+
+  const saveNote = async () => {
+    await DB.updateRequest(sel.id, {admin_notes:note});
+    setRequests(rs=>rs.map(r=>r.id===sel.id?{...r,admin_notes:note}:r));
+    setSel(s=>({...s,admin_notes:note}));
+  };
+
+  const saveSetting = async (key,val) => {
+    await DB.saveSetting(key,val);
+    setSettings(s=>({...s,[key]:val}));
+  };
+
+  const filtered = requests.filter(r =>
+    tab==='all' ? true :
+    tab==='pending' ? r.status==='pending' :
+    tab==='beat' ? r.type==='beat' :
+    tab==='research' ? r.type==='research' :
+    tab==='paid' ? ['paid','sent'].includes(r.status) : true
+  );
+
+  const stats = {
+    total: requests.length,
+    pending: requests.filter(r=>r.status==='pending').length,
+    paid: requests.filter(r=>['paid','sent'].includes(r.status)).length,
+    revenue: requests.filter(r=>['paid','sent'].includes(r.status)).reduce((a,r)=>a+(r.amount_paid||249),0),
+    today: requests.filter(r=>r.created_at?.startsWith(new Date().toISOString().slice(0,10))).length,
+  };
+
+  // LOGIN
+  if(!authed) return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div className="card" style={{padding:32,width:'100%',maxWidth:360}}>
+        <div style={{textAlign:'center',marginBottom:20}}><div style={{fontSize:36,marginBottom:8}}>🔐</div><h1 style={{fontSize:22,fontWeight:900,margin:0}}>כניסת מנהל</h1></div>
+        <input type="password" placeholder="סיסמה" value={pw} onChange={e=>setPw(e.target.value)} onKeyDown={e=>e.key==='Enter'&&login()} style={{marginBottom:12}}/>
+        <button className="btn btn-p" onClick={login}>התחבר</button>
+        <button className="btn btn-o" style={{marginTop:8}} onClick={()=>go('home')}>← חזור</button>
+      </div>
+    </div>
+  );
+
+  // SETTINGS VIEW
+  if(view==='settings') return (
+    <div style={{minHeight:'100vh'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 24px',borderBottom:'1px solid #1e1e2e'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:18,fontWeight:900}}>✈️ צייד טיסות</span>
+          <span style={{background:'#f5a62320',color:'#f5a623',padding:'3px 10px',borderRadius:8,fontSize:12}}>מנהל</span>
+        </div>
+        <div style={{display:'flex',gap:8}}>
+          <button className="tab tab-off" onClick={()=>setView('requests')}>📋 בקשות</button>
+          <button className="tab tab-on">⚙️ הגדרות</button>
+        </div>
+      </div>
+      <div style={{maxWidth:600,margin:'32px auto',padding:'0 16px'}}>
+        <h2 style={{fontSize:24,fontWeight:900,marginBottom:24}}>⚙️ הגדרות API</h2>
+        {[
+          {key:'serpapi_key',label:'SerpApi Key',desc:'serpapi.com → My Account → API Key'},
+          {key:'kiwi_key',label:'Kiwi Tequila Key',desc:'tequila.kiwi.com → API Key'},
+          {key:'claude_key',label:'Claude API Key',desc:'console.anthropic.com → API Keys'},
+          {key:'green_instance',label:'Green API Instance ID',desc:'green-api.com → Instance ID'},
+          {key:'green_token',label:'Green API Token',desc:'green-api.com → API Token'},
+          {key:'sumit_company_id',label:'SUMIT Company ID',desc:'sumit.co.il → הגדרות חברה'},
+          {key:'sumit_api_key',label:'SUMIT API Key',desc:'sumit.co.il → API Key'},
+          {key:'admin_password',label:'סיסמת מנהל',desc:'הסיסמה לכניסה לדשבורד'},
+        ].map(item => (
+          <div key={item.key} className="card" style={{padding:16,marginBottom:12}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+              <span style={{fontWeight:700,fontSize:14}}>{item.label}</span>
+              {settings[item.key] && <span style={{color:'#22c55e',fontSize:11}}>✓ מוגדר</span>}
+            </div>
+            <input
+              type={item.key.includes('password')?'password':'text'}
+              value={settings[item.key]||''}
+              onChange={e=>setSettings(s=>({...s,[item.key]:e.target.value}))}
+              onBlur={e=>saveSetting(item.key,e.target.value)}
+              placeholder={item.desc}
+              style={{fontSize:13}}
+            />
+            <p style={{fontSize:11,color:'#6b7280',marginTop:4}}>{item.desc}</p>
+          </div>
+        ))}
+        <h3 style={{fontSize:18,fontWeight:700,margin:'32px 0 16px'}}>🔗 Webhooks (Make.com)</h3>
+        {[
+          {key:'webhook_search',label:'Webhook חיפוש'},
+          {key:'webhook_payment',label:'Webhook תשלום'},
+          {key:'webhook_reply',label:'Webhook תשובת לקוח'},
+        ].map(item => (
+          <div key={item.key} className="card" style={{padding:16,marginBottom:12}}>
+            <span style={{fontWeight:700,fontSize:14}}>{item.label}</span>
+            <input value={settings[item.key]||''} onChange={e=>setSettings(s=>({...s,[item.key]:e.target.value}))} onBlur={e=>saveSetting(item.key,e.target.value)} style={{fontSize:12,marginTop:8}}/>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+
+  // REQUESTS VIEW (main dashboard)
+  return (
+    <div style={{minHeight:'100vh'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 24px',borderBottom:'1px solid #1e1e2e'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:18,fontWeight:900}}>✈️ צייד טיסות</span>
+          <span style={{background:'#f5a62320',color:'#f5a623',padding:'3px 10px',borderRadius:8,fontSize:12}}>מנהל</span>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button className="tab tab-on">📋 בקשות</button>
+          <button className="tab tab-off" onClick={()=>setView('settings')}>⚙️ הגדרות</button>
+          <button onClick={load} style={{background:'#1e1e2e',border:'none',color:'#9ca3af',padding:'8px 12px',borderRadius:8,cursor:'pointer',fontFamily:'Heebo',fontSize:12}}>🔄</button>
+          <button onClick={()=>{sessionStorage.removeItem('fh_admin');setAuthed(false);}} style={{background:'none',border:'none',color:'#6b7280',cursor:'pointer',fontFamily:'Heebo',fontSize:12}}>יציאה</button>
+        </div>
+      </div>
+      <div style={{padding:24,maxWidth:1400,margin:'0 auto'}}>
+        {/* STATS */}
+        <div style={{display:'grid',gridTemplateColumns:'repeat(auto-fit,minmax(140px,1fr))',gap:12,marginBottom:24}}>
+          {[
+            {icon:'📋',label:'סה"כ',val:stats.total},
+            {icon:'⏳',label:'ממתינות',val:stats.pending,color:'#f59e0b'},
+            {icon:'💳',label:'שולמו',val:stats.paid,color:'#22c55e'},
+            {icon:'📅',label:'היום',val:stats.today},
+            {icon:'💰',label:'הכנסה',val:'₪'+stats.revenue,color:'#f5a623'},
+          ].map(s=>(
+            <div key={s.label} className="card" style={{padding:16}}>
+              <div style={{fontSize:20,marginBottom:4}}>{s.icon}</div>
+              <div style={{fontSize:22,fontWeight:900,color:s.color||'#f0f0f5'}}>{s.val}</div>
+              <div style={{fontSize:12,color:'#6b7280'}}>{s.label}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* TABS */}
+        <div style={{display:'flex',gap:6,marginBottom:16,flexWrap:'wrap'}}>
+          {[{id:'all',l:'הכל'},{id:'pending',l:'⏳ ממתינות'},{id:'beat',l:'🎯 הכה מחיר'},{id:'research',l:'📊 מחקר'},{id:'paid',l:'💳 שולמו'}].map(t=>
+            <button key={t.id} className={`tab ${tab===t.id?'tab-on':'tab-off'}`} onClick={()=>setTab(t.id)}>{t.l} ({
+              t.id==='all'?requests.length:
+              t.id==='pending'?requests.filter(r=>r.status==='pending').length:
+              t.id==='beat'?requests.filter(r=>r.type==='beat').length:
+              t.id==='research'?requests.filter(r=>r.type==='research').length:
+              requests.filter(r=>['paid','sent'].includes(r.status)).length
+            })</button>
+          )}
+        </div>
+
+        {/* TABLE + DETAIL */}
+        <div style={{display:'flex',gap:16}}>
+          <div className="card" style={{flex:1,overflow:'hidden'}}>
+            {loading ? <div style={{textAlign:'center',padding:40,color:'#6b7280'}}>טוען...</div> :
+            filtered.length===0 ? <div style={{textAlign:'center',padding:40}}><div style={{fontSize:36,marginBottom:8}}>📭</div><div style={{color:'#6b7280'}}>אין בקשות</div></div> :
+            <div style={{overflowX:'auto'}}>
+              <table style={{width:'100%',fontSize:13,borderCollapse:'collapse'}}>
+                <thead>
+                  <tr style={{borderBottom:'1px solid #1e1e2e',background:'#0a0a0f'}}>
+                    {['תאריך','לקוח','מסלול','סוג','סטטוס','תשלום','פעולות'].map(h=>
+                      <th key={h} style={{padding:'12px 14px',textAlign:'right',fontWeight:500,color:'#6b7280',fontSize:12}}>{h}</th>
+                    )}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map(r=>(
+                    <tr key={r.id} onClick={()=>{setSel(r);setNote(r.admin_notes||'');}} style={{borderBottom:'1px solid #1e1e2e',cursor:'pointer',background:sel?.id===r.id?'#1e1e2e':'transparent',transition:'background .15s'}}>
+                      <td style={{padding:'10px 14px',fontSize:12,color:'#6b7280',whiteSpace:'nowrap'}}>{fmtDateTime(r.created_at)}</td>
+                      <td style={{padding:'10px 14px'}}><div style={{fontWeight:700}}>{r.name}</div><div style={{color:'#6b7280',fontSize:12}}>{r.whatsapp}</div></td>
+                      <td style={{padding:'10px 14px',fontFamily:'monospace',fontWeight:700}}>{r.from_iata} → {r.to_iata}<div style={{fontSize:11,color:'#6b7280',fontFamily:'Heebo',fontWeight:400}}>{fmtDate(r.depart_date)}{r.return_date?` — ${fmtDate(r.return_date)}`:''}</div></td>
+                      <td style={{padding:'10px 14px'}}><TypeBadge type={r.type}/></td>
+                      <td style={{padding:'10px 14px'}}><Badge status={r.status}/></td>
+                      <td style={{padding:'10px 14px'}}>{r.amount_paid ? <span style={{color:'#22c55e',fontWeight:700}}>₪{r.amount_paid}</span> : <span style={{color:'#6b7280'}}>—</span>}</td>
+                      <td style={{padding:'10px 14px'}}>
+                        <div style={{display:'flex',gap:4}}>
+                          {r.status==='pending' && <button className="btn btn-s" style={{background:'#3b82f620',color:'#3b82f6'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'searching');}}>🔍</button>}
+                          {['pending','searching','found','sent_price','awaiting_payment'].includes(r.status) && <button className="btn btn-s" style={{background:'#22c55e20',color:'#22c55e'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'paid');}}>💳</button>}
+                          {r.status==='paid' && <button className="btn btn-s" style={{background:'#10b98120',color:'#10b981'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'sent');}}>✅</button>}
+                          {r.status==='pending' && <button className="btn btn-s" style={{background:'#ef444420',color:'#ef4444'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'not_found');}}>✗</button>}
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>}
+          </div>
+
+          {/* DETAIL PANEL */}
+          {sel && <div className="card fade-in" style={{width:340,flexShrink:0,padding:20,alignSelf:'flex-start',position:'sticky',top:24}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:16}}>
+              <h3 style={{fontSize:16,fontWeight:700,margin:0}}>פרטי בקשה</h3>
+              <button onClick={()=>setSel(null)} style={{background:'none',border:'none',color:'#6b7280',cursor:'pointer',fontSize:18}}>✕</button>
+            </div>
+
+            <div style={{display:'flex',gap:8,marginBottom:16}}><Badge status={sel.status}/><TypeBadge type={sel.type}/></div>
+
+            <div style={{fontSize:13}}>
+              {[
+                ['לקוח',sel.name],
+                ['WhatsApp',sel.whatsapp],
+                ['אימייל',sel.email],
+                ['מסלול',`${sel.from_iata} → ${sel.to_iata}`],
+                ['יציאה',fmtDate(sel.depart_date)],
+                ['חזרה',sel.return_date?fmtDate(sel.return_date):'חד-כיווני'],
+                ['נוסעים',`${sel.adults} מבוגרים${sel.children>0?`, ${sel.children} ילדים`:''}`],
+                ['כבודה',sel.luggage==='hand'?'יד בלבד':sel.luggage==='1bag'?'מזוודה':'2 מזוודות'],
+                ['העדפה',sel.preference==='cheapest'?'הכי זול':sel.preference==='direct'?'ישיר':'מאוזן'],
+                ['חברה מועדפת',sel.preferred_airline],
+                ['גמישות',sel.flexible_dates?'±3 ימים':'לא'],
+                ['תקציב',sel.budget_usd?`$${sel.budget_usd}`:null],
+                ['מחיר לקוח',sel.customer_price_usd?`$${sel.customer_price_usd}`:null],
+                ['מקור',sel.customer_price_source],
+                ['שולם',sel.amount_paid?`₪${sel.amount_paid}`:null],
+                ['תשלום בתאריך',sel.paid_at?fmtDateTime(sel.paid_at):null],
+                ['נשלח בתאריך',sel.sent_at?fmtDateTime(sel.sent_at):null],
+                ['התקבל',fmtDateTime(sel.created_at)],
+              ].filter(([,v])=>v).map(([k,v])=>(
+                <div key={k} style={{display:'flex',justifyContent:'space-between',padding:'6px 0',borderBottom:'1px solid #1e1e2e10'}}>
+                  <span style={{color:'#6b7280'}}>{k}</span>
+                  <span style={{fontWeight:600,maxWidth:180,textAlign:'left',wordBreak:'break-all'}}>{v}</span>
+                </div>
+              ))}
+            </div>
+
+            {sel.customer_price_url && <a href={sel.customer_price_url} target="_blank" rel="noreferrer" style={{display:'block',fontSize:12,color:'#3b82f6',marginTop:8}}>🔗 קישור לטיסה שמצא</a>}
+            {sel.notes && <div style={{background:'#0a0a0f',border:'1px solid #1e1e2e',borderRadius:10,padding:10,fontSize:12,marginTop:12}}><span style={{color:'#6b7280'}}>הערות לקוח: </span>{sel.notes}</div>}
+
+            <div style={{marginTop:16}}>
+              <span className="lbl">הערות מנהל</span>
+              <textarea value={note} onChange={e=>setNote(e.target.value)} rows={3} placeholder="מה מצאת? מה שלחת?" style={{fontSize:13,resize:'vertical'}}/>
+              <button className="btn btn-o btn-s" style={{marginTop:6,width:'100%'}} onClick={saveNote}>שמור הערה</button>
+            </div>
+
+            <div style={{marginTop:16}}>
+              <span className="lbl">עדכן סטטוס</span>
+              <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:6,marginTop:6}}>
+                {[
+                  {s:'pending',l:'⏳ ממתין',c:'#f59e0b'},
+                  {s:'searching',l:'🔍 בחיפוש',c:'#3b82f6'},
+                  {s:'found',l:'🎯 נמצא',c:'#8b5cf6'},
+                  {s:'sent_price',l:'📨 נשלח מחיר',c:'#06b6d4'},
+                  {s:'awaiting_payment',l:'💳 ממתין תשלום',c:'#f97316'},
+                  {s:'paid',l:'✅ שולם',c:'#22c55e'},
+                  {s:'sent',l:'📤 נשלח',c:'#10b981'},
+                  {s:'not_found',l:'❌ לא נמצא',c:'#ef4444'},
+                ].map(o=>(
+                  <button key={o.s} onClick={()=>setStatus(sel.id,o.s)}
+                    style={{fontSize:11,padding:'8px 6px',borderRadius:8,border:`1px solid ${sel.status===o.s?o.c:'#1e1e2e'}`,background:sel.status===o.s?o.c+'20':'#0a0a0f',color:sel.status===o.s?o.c:'#9ca3af',cursor:'pointer',fontFamily:'Heebo',fontWeight:600}}>
+                    {o.l}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {sel.ai_response && <div style={{marginTop:16}}>
+              <span className="lbl">תוצאות AI</span>
+              <div style={{background:'#0a0a0f',border:'1px solid #1e1e2e',borderRadius:10,padding:10,fontSize:11,maxHeight:200,overflow:'auto',whiteSpace:'pre-wrap',color:'#9ca3af'}}>
+                {typeof sel.ai_response==='string'?sel.ai_response:JSON.stringify(sel.ai_response,null,2)}
+              </div>
+            </div>}
+          </div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============ APP ROUTER ============
+const App = () => {
+  const [page, setPage] = useState('home');
+  const pages = {
+    home: <Landing go={setPage}/>,
+    beat: <FlightForm type="beat" go={setPage}/>,
+    research: <FlightForm type="research" go={setPage}/>,
+    admin: <Admin go={setPage}/>,
+  };
+  return pages[page] || pages.home;
+};
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
