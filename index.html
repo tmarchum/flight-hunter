@@ -261,8 +261,17 @@ const FlightForm = ({type, go}) => {
       status:'pending'
     };
     const {data,error} = await DB.insertRequest(row);
-    if (!error && settings.webhook_search) {
-      try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id, serpapi_key:settings.serpapi_key, kiwi_key:settings.kiwi_key, claude_key:settings.claude_key, green_instance:settings.green_instance, green_token:settings.green_token})}); } catch(e){}
+    if (!error) {
+      // Send immediate WhatsApp confirmation to customer
+      if (settings.green_instance && settings.green_token) {
+        const wa = f.whatsapp.replace(/^0/,'').replace(/[^0-9]/g,'');
+        const msg = `שלום ${f.name} 👋\n\n✅ הבקשה שלך התקבלה!\n\n✈️ ${f.from_iata} → ${f.to_iata}\n📅 ${f.depart_date}${f.return_date?' — '+f.return_date:''}\n👥 ${f.adults} נוסעים\n${isBeat?'💰 המחיר שמצאת: $'+f.customer_price_usd:'📊 סוג: דוח מחקר'}\n\nהמערכת מחפשת עבורך כרגע בכל המקורות.\nנעדכן אותך ב-WhatsApp ברגע שנסיים! 🔍\n\n_צייד טיסות_`;
+        try { await fetch(`https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chatId:`972${wa}@c.us`,message:msg})}); } catch(e){}
+      }
+      // Trigger Make.com search webhook
+      if (settings.webhook_search) {
+        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id, serpapi_key:settings.serpapi_key, kiwi_key:settings.kiwi_key, claude_key:settings.claude_key, green_instance:settings.green_instance, green_token:settings.green_token})}); } catch(e){}
+      }
     }
     setLoading(false);
     if(!error) setStep(totalSteps+1);
@@ -411,6 +420,12 @@ const Admin = ({go}) => {
   }, []);
 
   useEffect(()=>{ if(authed) load(); },[authed,load]);
+  // Auto-refresh every 30 seconds
+  useEffect(()=>{
+    if(!authed) return;
+    const iv = setInterval(load, 30000);
+    return ()=>clearInterval(iv);
+  },[authed,load]);
 
   const login = () => {
     if(pw===adminPw || pw==='hunter2025') { setAuthed(true); sessionStorage.setItem('fh_admin','1'); }
@@ -440,6 +455,7 @@ const Admin = ({go}) => {
   const filtered = requests.filter(r =>
     tab==='all' ? true :
     tab==='pending' ? r.status==='pending' :
+    tab==='active' ? ['searching','found','sent_price','awaiting_payment'].includes(r.status) :
     tab==='beat' ? r.type==='beat' :
     tab==='research' ? r.type==='research' :
     tab==='paid' ? ['paid','sent'].includes(r.status) : true
@@ -448,6 +464,7 @@ const Admin = ({go}) => {
   const stats = {
     total: requests.length,
     pending: requests.filter(r=>r.status==='pending').length,
+    active: requests.filter(r=>['searching','found','sent_price','awaiting_payment'].includes(r.status)).length,
     paid: requests.filter(r=>['paid','sent'].includes(r.status)).length,
     revenue: requests.filter(r=>['paid','sent'].includes(r.status)).reduce((a,r)=>a+(r.amount_paid||249),0),
     today: requests.filter(r=>r.created_at?.startsWith(new Date().toISOString().slice(0,10))).length,
@@ -542,6 +559,7 @@ const Admin = ({go}) => {
           {[
             {icon:'📋',label:'סה"כ',val:stats.total},
             {icon:'⏳',label:'ממתינות',val:stats.pending,color:'#f59e0b'},
+            {icon:'🔍',label:'בטיפול',val:stats.active,color:'#3b82f6'},
             {icon:'💳',label:'שולמו',val:stats.paid,color:'#22c55e'},
             {icon:'📅',label:'היום',val:stats.today},
             {icon:'💰',label:'הכנסה',val:'₪'+stats.revenue,color:'#f5a623'},
@@ -556,10 +574,11 @@ const Admin = ({go}) => {
 
         {/* TABS */}
         <div style={{display:'flex',gap:6,marginBottom:16,flexWrap:'wrap'}}>
-          {[{id:'all',l:'הכל'},{id:'pending',l:'⏳ ממתינות'},{id:'beat',l:'🎯 הכה מחיר'},{id:'research',l:'📊 מחקר'},{id:'paid',l:'💳 שולמו'}].map(t=>
+          {[{id:'all',l:'הכל'},{id:'pending',l:'⏳ ממתינות'},{id:'active',l:'🔍 בטיפול'},{id:'beat',l:'🎯 הכה מחיר'},{id:'research',l:'📊 מחקר'},{id:'paid',l:'💳 שולמו'}].map(t=>
             <button key={t.id} className={`tab ${tab===t.id?'tab-on':'tab-off'}`} onClick={()=>setTab(t.id)}>{t.l} ({
               t.id==='all'?requests.length:
               t.id==='pending'?requests.filter(r=>r.status==='pending').length:
+              t.id==='active'?requests.filter(r=>['searching','found','sent_price','awaiting_payment'].includes(r.status)).length:
               t.id==='beat'?requests.filter(r=>r.type==='beat').length:
               t.id==='research'?requests.filter(r=>r.type==='research').length:
               requests.filter(r=>['paid','sent'].includes(r.status)).length
