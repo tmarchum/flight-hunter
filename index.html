@@ -270,7 +270,7 @@ const FlightForm = ({type, go}) => {
       }
       // Trigger Make.com search webhook
       if (settings.webhook_search) {
-        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id, serpapi_key:settings.serpapi_key, skyfare_key:settings.skyfare_key, claude_key:settings.claude_key, green_instance:settings.green_instance, green_token:settings.green_token})}); } catch(e){}
+        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id})}); } catch(e){}
       }
     }
     setLoading(false);
