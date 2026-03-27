@@ -12,7 +12,7 @@
       "id": 2,
       "module": "http:ActionSendData",
       "version": 3,
-      "parameters": {},
+      "parameters": {"handleErrors":false,"useNewZLibDeCompress":true,"shareCookies":false,"rejectUnauthorized":true,"followRedirect":true,"useQuerystring":false,"gzip":true,"useMtls":false},
       "mapper": {
         "url": "https://serpapi.com/search",
         "method": "get",
@@ -38,7 +38,7 @@
       "id": 3,
       "module": "http:ActionSendData",
       "version": 3,
-      "parameters": {},
+      "parameters": {"handleErrors":false,"useNewZLibDeCompress":true,"shareCookies":false,"rejectUnauthorized":true,"followRedirect":true,"useQuerystring":false,"gzip":true,"useMtls":false},
       "mapper": {
         "url": "https://skyfare-api.p.rapidapi.com/v1/flights/search",
         "method": "get",
@@ -65,7 +65,7 @@
       "id": 4,
       "module": "http:ActionSendData",
       "version": 3,
-      "parameters": {},
+      "parameters": {"handleErrors":false,"useNewZLibDeCompress":true,"shareCookies":false,"rejectUnauthorized":true,"followRedirect":true,"useQuerystring":false,"gzip":true,"useMtls":false},
       "mapper": {
         "url": "https://api.anthropic.com/v1/messages",
         "method": "post",
@@ -86,7 +86,7 @@
       "id": 5,
       "module": "http:ActionSendData",
       "version": 3,
-      "parameters": {},
+      "parameters": {"handleErrors":false,"useNewZLibDeCompress":true,"shareCookies":false,"rejectUnauthorized":true,"followRedirect":true,"useQuerystring":false,"gzip":true,"useMtls":false},
       "mapper": {
         "url": "https://stncskqjrmecjckxldvi.supabase.co/rest/v1/requests",
         "method": "post",
@@ -108,7 +108,7 @@
       "id": 6,
       "module": "http:ActionSendData",
       "version": 3,
-      "parameters": {},
+      "parameters": {"handleErrors":false,"useNewZLibDeCompress":true,"shareCookies":false,"rejectUnauthorized":true,"followRedirect":true,"useQuerystring":false,"gzip":true,"useMtls":false},
       "mapper": {
         "url": "https://api.green-api.com/waInstance{{1.green_instance}}/sendMessage/{{1.green_token}}",
         "method": "post",
