@@ -122,7 +122,7 @@ serve(async (req) => {
         msg += `🏆 *הטיסה הזולה ביותר שמצאנו:*\n\n`;
         msg += `💰 *$${best.price_usd}*${saving > 0 ? ` (חסכת $${saving}!)` : ""}\n`;
         msg += `🛫 *${best.airline}*\n`;
-        msg += `${best.stops === 0 ? "✅ טיסה ישירה" : `🔄 ${best.stops} עצירות`}\n`;
+        msg += `${best.stops === 0 ? "✅ טיסה ישירה" : `🔄 ${best.stops} עצירות`}${best.is_virtual_interline ? " 🔗 קונקשן חכם (שילוב חברות)" : ""}\n`;
         msg += `⏱️ ${best.duration_minutes ? Math.floor(best.duration_minutes / 60) + ":" + String(best.duration_minutes % 60).padStart(2, "0") + " שעות" : ""}\n`;
         if (best.departure_time) msg += `🕐 יציאה: ${best.departure_time}\n`;
         if (best.arrival_time) msg += `🕐 נחיתה: ${best.arrival_time}\n`;
@@ -149,7 +149,7 @@ serve(async (req) => {
         for (let i = startIdx; i < Math.min(5, results.length); i++) {
           const r = results[i];
           msg += `*${i + 1}. $${r.price_usd}* — ${r.airline}`;
-          msg += ` | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}`;
+          msg += ` | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}${r.is_virtual_interline ? " 🔗" : ""}`;
           if (r.duration_minutes) msg += ` | ${Math.floor(r.duration_minutes / 60)}:${String(r.duration_minutes % 60).padStart(2, "0")}`;
           msg += `\n`;
           if (r.departure_time) msg += `   🕐 ${r.departure_time}\n`;
@@ -206,7 +206,10 @@ body{background:#0a0a0f;color:#f0f0f5;font-family:'Heebo',sans-serif;display:fle
 </body>
 </html>`,
         {
-          headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" },
+          headers: new Headers([
+            ["content-type", "text/html; charset=utf-8"],
+            ["access-control-allow-origin", "*"],
+          ]),
         }
       );
     }

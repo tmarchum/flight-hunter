@@ -124,11 +124,21 @@ serve(async (req) => {
         return new Response("missing request_id", { status: 400, headers: corsHeaders });
       }
       const { data: r } = await sb.from("requests").select("*").eq("id", reqId).single();
-      if (!r) return new Response("request not found", { status: 404, headers: corsHeaders });
+      if (!r) return new Response(JSON.stringify({ error: "request not found" }), {
+        status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+
+      // Prevent duplicate sends — only approve if status is still "found"
+      if (r.status !== "found") {
+        return new Response(JSON.stringify({
+          success: false,
+          message: `הבקשה כבר טופלה (סטטוס: ${r.status})`,
+          request_id: reqId,
+        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      }
 
       const { data: sData } = await sb.rpc("get_settings_json");
       const s = sData || {};
-      const sPrice = s.service_price || "249";
       const aiResp = r.ai_response || {};
 
       // Send TEASER + payment link to customer via WhatsApp
@@ -137,19 +147,11 @@ serve(async (req) => {
         await sendTeaserWithPayment(sb, s, r, teaser);
       }
 
-      return new Response(
-        `<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>אושר — צייד טיסות</title>
-<style>body{background:#0a0a0f;color:#f0f0f5;font-family:'Heebo',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;text-align:center}
-.box{max-width:400px;padding:40px}</style>
-<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
-</head><body><div class="box">
-<div style="font-size:64px;margin-bottom:16px">✅</div>
-<h1 style="font-size:28px;font-weight:900;margin:0 0 12px">הבקשה אושרה!</h1>
-<p style="color:#6b7280;font-size:16px">ההצעה נשלחה ללקוח ${r.name} ב-WhatsApp.<br/>הלקוח יתבקש לאשר ולשלם.</p>
-</div></body></html>`,
-        { headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } }
-      );
+      return new Response(JSON.stringify({
+        success: true,
+        message: `הבקשה אושרה! ההצעה נשלחה ללקוח ${r.name} ב-WhatsApp.`,
+        request_id: reqId,
+      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
     }
 
     // --- Normal POST: search flights ---
@@ -307,16 +309,113 @@ serve(async (req) => {
       }
     }
 
-    // Deduplicate — same airline + same price + same stops = likely same flight from different engines
-    const seen = new Set<string>();
-    const deduped: any[] = [];
-    for (const r of results) {
-      const key = `${r.airline}|${r.price_usd}|${r.stops}|${r.duration_minutes}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        deduped.push(r);
+    // 3. Kiwi.com via RapidAPI
+    if (settings.skyfare_key) {
+      try {
+        const rapidApiKey = settings.skyfare_key;
+        const kiwiEndpoint = request.is_one_way ? "one-way" : "round-trip";
+        // Kiwi API requires adultsHoldBags/adultsHandBags per-adult for adults>1,
+        // so we always query with adults=1 and multiply price by total passengers
+        const totalPax = (request.adults || 1) + (request.children || 0);
+        const kiwiParams: Record<string, string> = {
+          source: `City:${request.from_iata}`,
+          destination: `City:${request.to_iata}`,
+          currency: "usd",
+          locale: "en",
+          adults: "1",
+          children: "0",
+          infants: "0",
+          handbags: "1",
+          holdbags: "0",
+          cabinClass: "ECONOMY",
+          sortBy: "PRICE",
+          sortOrder: "ASCENDING",
+          limit: "10",
+          transportTypes: "FLIGHT",
+          // Virtual interlining — Kiwi's strength: combine different airlines
+          enableSelfTransfer: "true",
+          allowDifferentStationConnection: "true",
+          allowOvernightStopover: "true",
+          enableThrowAwayTicketing: "true",
+          allowChangeInboundSource: "true",
+          allowChangeInboundDestination: "true",
+          applyMixedClasses: "true",
+          allowReturnFromDifferentCity: "true",
+        };
+        if (!request.is_one_way) {
+          kiwiParams.outbound = "SUNDAY,MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY,SATURDAY";
+        }
+
+        const kiwiResp = await fetch(
+          `https://kiwi-com-cheap-flights.p.rapidapi.com/${kiwiEndpoint}?${new URLSearchParams(kiwiParams)}`,
+          {
+            headers: {
+              "Content-Type": "application/json",
+              "X-RapidAPI-Key": rapidApiKey,
+              "X-RapidAPI-Host": "kiwi-com-cheap-flights.p.rapidapi.com",
+            },
+          }
+        );
+
+        if (kiwiResp.ok) {
+          const kiwiData = await kiwiResp.json();
+          const itineraries = kiwiData.itineraries || [];
+          for (const itin of itineraries.slice(0, 5)) {
+            const outbound = itin.outbound || {};
+            const sectorSegs = outbound.sectorSegments || [];
+            const firstSeg = sectorSegs[0]?.segment || {};
+            const lastSeg = sectorSegs[sectorSegs.length - 1]?.segment || firstSeg;
+            const pricePerPerson = parseFloat(itin.price?.amount || "0");
+            const priceUsd = pricePerPerson * totalPax;
+            const durationSec = outbound.duration || 0;
+
+            const segAirlines = sectorSegs.map((ss: any) => ss.segment?.carrier?.name).filter(Boolean);
+            const uniqueAirlines = [...new Set(segAirlines)];
+            const isVirtualInterline = uniqueAirlines.length > 1;
+            const airlineLabel = isVirtualInterline ? uniqueAirlines.join(" + ") : (firstSeg.carrier?.name || "Unknown");
+
+            results.push({
+              source: "Kiwi.com",
+              price_usd: Math.round(priceUsd),
+              airline: airlineLabel,
+              is_virtual_interline: isVirtualInterline,
+              stops: Math.max(0, sectorSegs.length - 1),
+              duration_minutes: Math.round(durationSec / 60),
+              departure_time: firstSeg.source?.localTime || "",
+              arrival_time: lastSeg.destination?.localTime || "",
+              departure_airport: firstSeg.source?.station?.name || "",
+              arrival_airport: lastSeg.destination?.station?.name || "",
+              booking_url: null,
+              flights_detail: sectorSegs.map((ss: any) => {
+                const seg = ss.segment || {};
+                return {
+                  airline: seg.carrier?.name || "",
+                  flight_number: `${seg.carrier?.code || ""}${seg.code || ""}`,
+                  departure: { id: seg.source?.station?.code, time: seg.source?.localTime },
+                  arrival: { id: seg.destination?.station?.code, time: seg.destination?.localTime },
+                  duration: Math.round((seg.duration || 0) / 60),
+                };
+              }),
+            });
+          }
+        } else {
+          console.error("Kiwi API error:", kiwiResp.status, await kiwiResp.text());
+        }
+      } catch (e) {
+        console.error("Kiwi/RapidAPI error:", e);
       }
     }
+
+    // Deduplicate — same airline + same stops + same duration = same flight, keep cheapest price
+    const dedupMap = new Map<string, any>();
+    for (const r of results) {
+      const key = `${r.airline}|${r.stops}|${r.duration_minutes}`;
+      const existing = dedupMap.get(key);
+      if (!existing || r.price_usd < existing.price_usd) {
+        dedupMap.set(key, r);
+      }
+    }
+    const deduped = Array.from(dedupMap.values());
 
     // Sort by price
     deduped.sort((a, b) => (a.price_usd || 9999) - (b.price_usd || 9999));
@@ -324,13 +423,33 @@ serve(async (req) => {
     // Engine stats for admin
     const googleCount = results.filter(r => r.source === "Google Flights").length;
     const skyCount = results.filter(r => r.source === "Skyscanner").length;
+    const kiwiCount = results.filter(r => r.source === "Kiwi.com").length;
     let engineStats = `🔎 *מנועי חיפוש:*\n`;
     if (settings.serpapi_key) engineStats += `  • Google Flights: ${googleCount > 0 ? googleCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
     if (settings.skyfare_key) engineStats += `  • Skyscanner: ${skyCount > 0 ? skyCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
+    if (settings.skyfare_key) engineStats += `  • Kiwi.com: ${kiwiCount > 0 ? kiwiCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
     if (!settings.serpapi_key && !settings.skyfare_key) engineStats += `  ⚠️ אין מפתחות API מוגדרים!\n`;
+    const viCount = deduped.filter(r => r.is_virtual_interline).length;
+    if (viCount > 0) engineStats += `  🔗 קונקשנים חכמים (Virtual Interline): ${viCount}\n`;
     engineStats += `  📊 סה"כ: ${deduped.length} תוצאות ייחודיות (מתוך ${results.length})\n`;
 
     const cheapest = deduped.length > 0 ? deduped[0].price_usd : null;
+
+    // Find cheapest direct vs cheapest connection for smart recommendation
+    const cheapestDirect = deduped.find(r => r.stops === 0);
+    const cheapestConnection = deduped.find(r => r.stops > 0 && (r.price_usd < (cheapestDirect?.price_usd || Infinity)));
+    let connectionTip = "";
+    if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
+      const connSaving = cheapestDirect.price_usd - cheapestConnection.price_usd;
+      const connPct = Math.round((connSaving / cheapestDirect.price_usd) * 100);
+      if (connSaving >= 20 && connPct >= 10) {
+        connectionTip = `\n💡 *טיסה עם קונקשן ב-$${cheapestConnection.price_usd}* — חיסכון של $${connSaving} (${connPct}%) לעומת ישירה ב-$${cheapestDirect.price_usd}`;
+        if (cheapestConnection.is_virtual_interline) {
+          connectionTip += ` 🔗 (שילוב חברות: ${cheapestConnection.airline})`;
+        }
+        connectionTip += `\n`;
+      }
+    }
 
     const isBeat = request.type === "beat";
     let status = "found";
@@ -373,15 +492,22 @@ serve(async (req) => {
         adminSummary += `חיסכון: $${saving} (${savingPct}%)\n\n`;
         for (let i = 0; i < Math.min(5, deduped.length); i++) {
           const r = deduped[i];
-          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | 🔎 ${r.source}\n`;
+          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
         }
+        adminSummary += connectionTip;
         adminSummary += `\n${engineStats}`;
 
         // Customer gets teaser — price yes, details no, NO source
         customerTeaser = `🎉 חדשות מעולות!\n\n`;
         customerTeaser += `מצאנו טיסה ב-*$${cheapest}* במקום $${customerPrice} שמצאת!\n`;
-        customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n\n`;
-        customerTeaser += `לקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.\n\n`;
+        customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n`;
+        if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
+          const cs = cheapestDirect.price_usd - cheapestConnection.price_usd;
+          if (cs >= 20) {
+            customerTeaser += `\n💡 *מצאנו גם קונקשן חכם* שחוסך $${cs} לעומת טיסה ישירה!\n`;
+          }
+        }
+        customerTeaser += `\nלקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.\n\n`;
         customerTeaser += `📋 מספר בקשה: ${requestId}`;
       } else {
         adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
@@ -415,9 +541,10 @@ serve(async (req) => {
       adminSummary += `🏆 ${Math.min(5, deduped.length)} הדילים הכי טובים:\n\n`;
       for (let i = 0; i < Math.min(5, deduped.length); i++) {
         const r = deduped[i];
-        adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | 🔎 ${r.source}\n`;
+        adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
       }
       adminSummary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${deduped[0].airline}`;
+      adminSummary += connectionTip;
       adminSummary += `\n\n${engineStats}`;
 
       // Customer gets teaser — cheapest price yes, full details no, NO source
@@ -426,7 +553,14 @@ serve(async (req) => {
       customerTeaser += `🔄 ${tripLabel(request)}\n`;
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
       customerTeaser += `🔍 מצאנו *${deduped.length} טיסות*\n`;
-      customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n\n`;
+      customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n`;
+      if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
+        const cs = cheapestDirect.price_usd - cheapestConnection.price_usd;
+        if (cs >= 20) {
+          customerTeaser += `\n💡 *מצאנו גם קונקשן חכם* שחוסך $${cs} לעומת טיסה ישירה!\n`;
+        }
+      }
+      customerTeaser += `\n`;
       customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.\n\n`;
       customerTeaser += `📋 מספר בקשה: ${requestId}`;
     }
@@ -440,6 +574,7 @@ serve(async (req) => {
       sources_searched: [
         settings.serpapi_key ? "Google Flights" : null,
         settings.skyfare_key ? "Skyscanner" : null,
+        settings.skyfare_key ? "Kiwi.com" : null,
       ].filter(Boolean),
     };
 
