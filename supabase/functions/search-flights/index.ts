@@ -16,6 +16,54 @@ serve(async (req) => {
 
   try {
     const sb = createClient(SB_URL, SB_KEY);
+    const url = new URL(req.url);
+
+    // --- Handle admin approval link (GET ?action=approve&request_id=xxx) ---
+    if (req.method === "GET" && url.searchParams.get("action") === "approve") {
+      const reqId = url.searchParams.get("request_id") || "";
+      if (!reqId) {
+        return new Response("missing request_id", { status: 400, headers: corsHeaders });
+      }
+      const { data: r } = await sb.from("requests").select("*").eq("id", reqId).single();
+      if (!r) return new Response("request not found", { status: 404, headers: corsHeaders });
+
+      const { data: sData } = await sb.rpc("get_settings_json");
+      const s = sData || {};
+      const sPrice = s.service_price || "249";
+      const aiResp = r.ai_response || {};
+
+      // Send TEASER to customer via WhatsApp
+      if (s.green_instance && s.green_token) {
+        const wa = r.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+        const chatId = `972${wa}@c.us`;
+        let msg = `שלום ${r.name} 👋\n\n`;
+        msg += aiResp.customer_teaser || "מצאנו תוצאות מעולות!";
+        msg += `\n\n💳 המחיר לשירות: ₪${sPrice}`;
+        msg += `\nרוצה להמשיך? השב *כן* כדי לקבל קישור לתשלום.`;
+        msg += `\n\n_צייד טיסות ✈️_`;
+        await fetch(
+          `https://api.green-api.com/waInstance${s.green_instance}/sendMessage/${s.green_token}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: msg }) }
+        );
+      }
+      await sb.from("requests").update({ status: "sent_price" }).eq("id", reqId);
+
+      return new Response(
+        `<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>אושר — צייד טיסות</title>
+<style>body{background:#0a0a0f;color:#f0f0f5;font-family:'Heebo',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0;text-align:center}
+.box{max-width:400px;padding:40px}</style>
+<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
+</head><body><div class="box">
+<div style="font-size:64px;margin-bottom:16px">✅</div>
+<h1 style="font-size:28px;font-weight:900;margin:0 0 12px">הבקשה אושרה!</h1>
+<p style="color:#6b7280;font-size:16px">ההצעה נשלחה ללקוח ${r.name} ב-WhatsApp.<br/>הלקוח יתבקש לאשר ולשלם.</p>
+</div></body></html>`,
+        { headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } }
+      );
+    }
+
+    // --- Normal POST: search flights ---
     const body = await req.json();
     const requestId = body.id;
 
@@ -73,22 +121,34 @@ serve(async (req) => {
         const serpResp = await fetch(`https://serpapi.com/search.json?${params}`);
         const serpData = await serpResp.json();
 
-        // Extract best flights
         const bestFlights = serpData.best_flights || [];
         const otherFlights = serpData.other_flights || [];
         const allFlights = [...bestFlights, ...otherFlights];
 
         for (const flight of allFlights.slice(0, 5)) {
+          const firstLeg = flight.flights?.[0];
+          const lastLeg = flight.flights?.[flight.flights?.length - 1];
           results.push({
             source: "Google Flights",
             price_usd: flight.price,
-            airline: flight.flights?.[0]?.airline || "Unknown",
+            airline: firstLeg?.airline || "Unknown",
             stops: flight.flights ? flight.flights.length - 1 : 0,
             duration_minutes: flight.total_duration,
-            departure_time: flight.flights?.[0]?.departure_airport?.time || "",
-            arrival_time: flight.flights?.[flight.flights?.length - 1]?.arrival_airport?.time || "",
+            departure_time: firstLeg?.departure_airport?.time || "",
+            arrival_time: lastLeg?.arrival_airport?.time || "",
+            departure_airport: firstLeg?.departure_airport?.name || "",
+            arrival_airport: lastLeg?.arrival_airport?.name || "",
             booking_token: flight.booking_token || null,
-            raw: flight,
+            layovers: flight.layovers || [],
+            flights_detail: (flight.flights || []).map((f: any) => ({
+              airline: f.airline,
+              flight_number: f.flight_number,
+              airplane: f.airplane,
+              departure: f.departure_airport,
+              arrival: f.arrival_airport,
+              duration: f.duration,
+              legroom: f.legroom,
+            })),
           });
         }
       } catch (e) {
@@ -96,97 +156,147 @@ serve(async (req) => {
       }
     }
 
-    // 2. SkyFare API
+    // 2. Skyscanner via RapidAPI (using skyfare_key as RapidAPI key)
     if (settings.skyfare_key) {
       try {
-        const skyResp = await fetch("https://api.skyfare.io/v1/search", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${settings.skyfare_key}`,
-          },
-          body: JSON.stringify({
-            origin: request.from_iata,
-            destination: request.to_iata,
-            departure_date: request.depart_date,
-            return_date: request.is_one_way ? null : request.return_date,
-            adults: request.adults,
-            children: request.children || 0,
-            currency: "USD",
-          }),
-        });
-        const skyData = await skyResp.json();
-        const skyResults = skyData.results || skyData.flights || skyData.data || [];
+        // Try multiple Skyscanner endpoints on RapidAPI
+        const rapidApiKey = settings.skyfare_key;
+        const searchType = request.is_one_way ? "search-one-way" : "search-roundtrip";
+        const skyParams: any = {
+          fromEntityId: request.from_iata,
+          toEntityId: request.to_iata,
+          departDate: request.depart_date,
+          adults: String(request.adults),
+          currency: "USD",
+        };
+        if (!request.is_one_way && request.return_date) {
+          skyParams.returnDate = request.return_date;
+        }
+        const qs = new URLSearchParams(skyParams).toString();
 
-        for (const flight of (Array.isArray(skyResults) ? skyResults : []).slice(0, 5)) {
-          results.push({
-            source: "SkyFare",
-            price_usd: flight.price || flight.price_usd,
-            airline: flight.airline || flight.carrier || "Unknown",
-            stops: flight.stops ?? flight.num_stops ?? 0,
-            duration_minutes: flight.duration || flight.duration_minutes || 0,
-            departure_time: flight.departure_time || flight.departure || "",
-            arrival_time: flight.arrival_time || flight.arrival || "",
-            booking_url: flight.booking_url || flight.deep_link || null,
-            raw: flight,
-          });
+        // Try sky-scanner3 API
+        const skyResp = await fetch(
+          `https://sky-scanner3.p.rapidapi.com/flights/${searchType}?${qs}`,
+          {
+            headers: {
+              "X-RapidAPI-Key": rapidApiKey,
+              "X-RapidAPI-Host": "sky-scanner3.p.rapidapi.com",
+            },
+          }
+        );
+
+        if (skyResp.ok) {
+          const skyData = await skyResp.json();
+          const itineraries = skyData.data?.itineraries || [];
+
+          for (const itin of itineraries.slice(0, 5)) {
+            const legs = itin.legs || [];
+            const firstLeg = legs[0];
+            results.push({
+              source: "Skyscanner",
+              price_usd: itin.price?.raw || itin.price?.amount,
+              airline: firstLeg?.carriers?.marketing?.[0]?.name || "Unknown",
+              stops: firstLeg?.stopCount || 0,
+              duration_minutes: firstLeg?.durationInMinutes || 0,
+              departure_time: firstLeg?.departure || "",
+              arrival_time: firstLeg?.arrival || "",
+              departure_airport: firstLeg?.origin?.name || "",
+              arrival_airport: firstLeg?.destination?.name || "",
+              booking_url: itin.url || null,
+              flights_detail: (firstLeg?.segments || []).map((s: any) => ({
+                airline: s.marketingCarrier?.name,
+                flight_number: s.flightNumber,
+                departure: { id: s.origin?.flightPlaceId, name: s.origin?.name, time: s.departure },
+                arrival: { id: s.destination?.flightPlaceId, name: s.destination?.name, time: s.arrival },
+                duration: s.durationInMinutes,
+              })),
+            });
+          }
+        } else {
+          console.error("Skyscanner API error:", skyResp.status, await skyResp.text());
         }
       } catch (e) {
-        console.error("SkyFare error:", e);
+        console.error("Skyscanner/RapidAPI error:", e);
       }
     }
 
     // Sort by price
     results.sort((a, b) => (a.price_usd || 9999) - (b.price_usd || 9999));
 
-    // Find cheapest price
     const cheapest = results.length > 0 ? results[0].price_usd : null;
 
-    // Build AI response
     const isBeat = request.type === "beat";
-    let summary = "";
     let status = "found";
+
+    // --- Build TWO summaries: one for admin (full), one for customer (teaser) ---
+
+    let adminSummary = "";   // Full details — for admin + after payment
+    let customerTeaser = ""; // No prices/details — for customer before payment
 
     if (results.length === 0) {
       status = "not_found";
-      summary = "לא נמצאו תוצאות עבור החיפוש הזה. נסה תאריכים אחרים או יעד אחר.";
+      adminSummary = "לא נמצאו תוצאות עבור החיפוש הזה.";
+      customerTeaser = adminSummary;
     } else if (isBeat) {
       const customerPrice = request.customer_price_usd || 0;
       if (cheapest && cheapest < customerPrice) {
         const saving = customerPrice - cheapest;
-        summary = `🎉 מצאנו טיסה זולה יותר!\n\n`;
-        summary += `המחיר שלך: $${customerPrice}\n`;
-        summary += `המחיר שמצאנו: $${cheapest}\n`;
-        summary += `חיסכון: $${saving}\n\n`;
-        summary += `✈️ ${results[0].airline} | ${results[0].stops === 0 ? "ישיר" : results[0].stops + " עצירות"}\n`;
-        summary += `🔎 מקור: ${results[0].source}`;
+        const savingPct = Math.round((saving / customerPrice) * 100);
+
+        // Admin gets full details
+        adminSummary = `🎉 מצאנו טיסה זולה יותר!\n\n`;
+        adminSummary += `המחיר של הלקוח: $${customerPrice}\n`;
+        adminSummary += `המחיר שמצאנו: $${cheapest}\n`;
+        adminSummary += `חיסכון: $${saving} (${savingPct}%)\n\n`;
+        for (let i = 0; i < Math.min(5, results.length); i++) {
+          const r = results[i];
+          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | ${r.source}\n`;
+        }
+
+        // Customer gets teaser only — no prices
+        customerTeaser = `🎉 חדשות מעולות!\n\n`;
+        customerTeaser += `מצאנו טיסה *זולה יותר* מהמחיר שמצאת ($${customerPrice})!\n`;
+        customerTeaser += `💰 חיסכון של *${savingPct}%*\n`;
+        customerTeaser += `✈️ ${results[0].stops === 0 ? "טיסה ישירה" : results[0].stops + " עצירות"}\n\n`;
+        customerTeaser += `לקבלת כל הפרטים המלאים — אשר תשלום.`;
       } else {
-        summary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
-        summary += `המחיר הזול ביותר שמצאנו: $${cheapest}\n`;
-        summary += `ייתכן שהמחיר שמצאת הוא כבר הדיל הכי טוב!`;
+        adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
+        adminSummary += `המחיר הזול ביותר שמצאנו: $${cheapest}\n`;
+        adminSummary += `ייתכן שהמחיר שמצא הלקוח הוא כבר הדיל הכי טוב.`;
+        customerTeaser = adminSummary;
         status = "not_found";
       }
     } else {
-      // Research report
-      summary = `📊 דוח מחקר טיסות\n`;
-      summary += `${request.from_iata} ← ${request.to_iata}\n`;
-      summary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      summary += `🏆 5 הדילים הכי טובים:\n\n`;
+      // Research
+      adminSummary = `📊 דוח מחקר טיסות\n`;
+      adminSummary += `${request.from_iata} → ${request.to_iata}\n`;
+      adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
+      adminSummary += `🏆 5 הדילים הכי טובים:\n\n`;
       for (let i = 0; i < Math.min(5, results.length); i++) {
         const r = results[i];
-        summary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | ${r.source}\n`;
+        adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | ${r.source}\n`;
       }
-      summary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${results[0].airline}`;
+      adminSummary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${results[0].airline}`;
+
+      // Customer gets teaser — no exact prices
+      customerTeaser = `📊 הדוח שלך מוכן!\n\n`;
+      customerTeaser += `✈️ ${request.from_iata} → ${request.to_iata}\n`;
+      customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
+      customerTeaser += `🔍 מצאנו *${results.length} טיסות* מ-${results.length > 1 ? results.length : 1} מקורות\n`;
+      customerTeaser += `✅ כולל טיסות ${results.some((r) => r.stops === 0) ? "ישירות ועם עצירות" : "עם עצירות"}\n`;
+      customerTeaser += `💡 הדוח כולל דירוג, השוואה והמלצה אישית\n\n`;
+      customerTeaser += `לקבלת הדוח המלא עם כל המחירים — אשר תשלום.`;
     }
 
     const aiResponse = {
-      summary,
+      admin_summary: adminSummary,
+      customer_teaser: customerTeaser,
       results: results.slice(0, 5),
       cheapest_price: cheapest,
       search_time: new Date().toISOString(),
       sources_searched: [
         settings.serpapi_key ? "Google Flights" : null,
-        settings.skyfare_key ? "SkyFare" : null,
+        settings.skyfare_key ? "Skyscanner" : null,
       ].filter(Boolean),
     };
 
@@ -202,19 +312,21 @@ serve(async (req) => {
 
     const servicePrice = settings.service_price || "249";
     const adminApproval = settings.admin_approval === "true";
+    const approveUrl = `${SB_URL}/functions/v1/search-flights?action=approve&request_id=${requestId}`;
 
-    // If admin approval is enabled, stop here — admin will review in dashboard and approve
+    // If admin approval is enabled, send admin full details + approval link
     if (adminApproval && status === "found") {
-      // Send notification to admin via WhatsApp (if admin phone is configured)
       if (settings.green_instance && settings.green_token && settings.admin_whatsapp) {
         const adminWa = settings.admin_whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
         const adminChatId = `972${adminWa}@c.us`;
-        let adminMsg = `🔔 בקשה חדשה מחכה לאישור!\n\n`;
+        let adminMsg = `🔔 *בקשה חדשה מחכה לאישורך!*\n\n`;
         adminMsg += `👤 ${request.name} (${request.whatsapp})\n`;
         adminMsg += `✈️ ${request.from_iata} → ${request.to_iata}\n`;
-        adminMsg += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-        adminMsg += summary;
-        adminMsg += `\n\n⚠️ היכנס לדשבורד כדי לאשר את השליחה ללקוח.`;
+        adminMsg += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n`;
+        adminMsg += `👥 ${request.adults} נוסעים\n\n`;
+        adminMsg += adminSummary;
+        adminMsg += `\n\n✅ *לאישור ושליחה ללקוח — לחץ כאן:*\n${approveUrl}\n\n`;
+        adminMsg += `_צייד טיסות ✈️_`;
         try {
           await fetch(
             `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
@@ -224,15 +336,13 @@ serve(async (req) => {
           console.error("Admin WhatsApp notification error:", e);
         }
       }
-      // Status stays "found" — admin approves from dashboard
     } else if (settings.green_instance && settings.green_token && status === "found") {
-      // No admin approval — send directly to customer
+      // No admin approval — send TEASER to customer (not full details!)
       const wa = request.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
       const chatId = `972${wa}@c.us`;
 
       let whatsappMsg = `שלום ${request.name} 👋\n\n`;
-      whatsappMsg += `🔍 סיימנו לחפש עבורך!\n\n`;
-      whatsappMsg += summary;
+      whatsappMsg += customerTeaser;
       whatsappMsg += `\n\n💳 המחיר לשירות: ₪${servicePrice}`;
       whatsappMsg += `\nרוצה להמשיך? השב *כן* כדי לקבל קישור לתשלום.`;
       whatsappMsg += `\n\n_צייד טיסות ✈️_`;
@@ -240,13 +350,8 @@ serve(async (req) => {
       try {
         await fetch(
           `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chatId, message: whatsappMsg }),
-          }
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: whatsappMsg }) }
         );
-        // Update status to sent_price
         await sb.from("requests").update({ status: "sent_price" }).eq("id", requestId);
       } catch (e) {
         console.error("WhatsApp send error:", e);

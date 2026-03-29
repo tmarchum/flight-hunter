@@ -765,27 +765,18 @@ const Admin = ({go}) => {
               </div>
             </div>}
 
-            {/* Admin Approval Button — shown when status is 'found' and admin_approval is enabled */}
+            {/* Admin Approval Button — shown when status is 'found' */}
             {sel.status==='found' && <div style={{marginTop:16}}>
               <button className="btn btn-p" style={{background:'#22c55e',color:'#fff',marginBottom:8}} onClick={async()=>{
-                // Approve: call search-flights edge function to send WhatsApp to customer
-                const wa = sel.whatsapp.replace(/^0/,'').replace(/[^0-9]/g,'');
-                const chatId = `972${wa}@c.us`;
-                const aiResp = sel.ai_response || {};
-                const sPrice = settings.service_price||'249';
-                let msg = `שלום ${sel.name} 👋\n\n🔍 סיימנו לחפש עבורך!\n\n`;
-                msg += aiResp.summary || '';
-                msg += `\n\n💳 המחיר לשירות: ₪${sPrice}`;
-                msg += `\nרוצה להמשיך? השב *כן* כדי לקבל קישור לתשלום.`;
-                msg += `\n\n_צייד טיסות ✈️_`;
-                if(settings.green_instance && settings.green_token) {
-                  try { await fetch(`https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chatId,message:msg})}); } catch(e){}
-                }
+                // Approve: send TEASER to customer via Edge Function approve link
+                try {
+                  await fetch(`${SB_URL}/functions/v1/search-flights?action=approve&request_id=${sel.id}`);
+                } catch(e){}
                 await setStatus(sel.id,'sent_price');
               }}>
                 ✅ אשר ושלח ללקוח
               </button>
-              <p style={{fontSize:11,color:'#6b7280',textAlign:'center'}}>שולח את התוצאות + קישור תשלום ללקוח ב-WhatsApp</p>
+              <p style={{fontSize:11,color:'#6b7280',textAlign:'center'}}>שולח טיזר ללקוח ב-WhatsApp (ללא מחירים — רק אחרי תשלום)</p>
             </div>}
           </div>}
         </div>
