@@ -253,12 +253,11 @@ serve(async (req) => {
           adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | ${r.source}\n`;
         }
 
-        // Customer gets teaser only — no prices
+        // Customer gets teaser — price yes, details no
         customerTeaser = `🎉 חדשות מעולות!\n\n`;
-        customerTeaser += `מצאנו טיסה *זולה יותר* מהמחיר שמצאת ($${customerPrice})!\n`;
-        customerTeaser += `💰 חיסכון של *${savingPct}%*\n`;
-        customerTeaser += `✈️ ${results[0].stops === 0 ? "טיסה ישירה" : results[0].stops + " עצירות"}\n\n`;
-        customerTeaser += `לקבלת כל הפרטים המלאים — אשר תשלום.`;
+        customerTeaser += `מצאנו טיסה ב-*$${cheapest}* במקום $${customerPrice} שמצאת!\n`;
+        customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n\n`;
+        customerTeaser += `לקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.`;
       } else {
         adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
         adminSummary += `המחיר הזול ביותר שמצאנו: $${cheapest}\n`;
@@ -278,14 +277,13 @@ serve(async (req) => {
       }
       adminSummary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${results[0].airline}`;
 
-      // Customer gets teaser — no exact prices
+      // Customer gets teaser — cheapest price yes, full details no
       customerTeaser = `📊 הדוח שלך מוכן!\n\n`;
       customerTeaser += `✈️ ${request.from_iata} → ${request.to_iata}\n`;
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      customerTeaser += `🔍 מצאנו *${results.length} טיסות* מ-${results.length > 1 ? results.length : 1} מקורות\n`;
-      customerTeaser += `✅ כולל טיסות ${results.some((r) => r.stops === 0) ? "ישירות ועם עצירות" : "עם עצירות"}\n`;
-      customerTeaser += `💡 הדוח כולל דירוג, השוואה והמלצה אישית\n\n`;
-      customerTeaser += `לקבלת הדוח המלא עם כל המחירים — אשר תשלום.`;
+      customerTeaser += `🔍 מצאנו *${results.length} טיסות*\n`;
+      customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n\n`;
+      customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.`;
     }
 
     const aiResponse = {
