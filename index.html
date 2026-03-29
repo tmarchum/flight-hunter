@@ -424,7 +424,7 @@ const FlightForm = ({type, go, price='249'}) => {
               <CitySearch label="מאיפה" value={f.from_iata} displayValue={fromDisplay} onChange={(iata,display)=>{u('from_iata',iata);setFromDisplay(display);}} placeholder="תל אביב, לונדון..." />
               <CitySearch label="לאן" value={f.to_iata} displayValue={toDisplay} onChange={(iata,display)=>{u('to_iata',iata);setToDisplay(display);}} placeholder="רומא, פריז..." />
             </div>
-            <div style={{marginBottom:10}}><span className="lbl">תאריך יציאה</span><input type="date" value={f.depart_date} onChange={e=>u('depart_date',e.target.value)}/></div>
+            <div style={{marginBottom:10}}><span className="lbl">תאריך יציאה</span><input type="date" value={f.depart_date} onChange={e=>{u('depart_date',e.target.value); if(f.return_date && e.target.value > f.return_date) u('return_date','');}}/></div>
             {!f.is_one_way && <div style={{marginBottom:10}}><span className="lbl">תאריך חזרה</span><input type="date" value={f.return_date} min={f.depart_date} onChange={e=>u('return_date',e.target.value)}/></div>}
             <label style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:14,cursor:'pointer'}}>
               <input type="checkbox" checked={f.is_one_way} onChange={e=>u('is_one_way',e.target.checked)} style={{width:'auto',padding:0,border:'none'}}/> כיוון אחד בלבד

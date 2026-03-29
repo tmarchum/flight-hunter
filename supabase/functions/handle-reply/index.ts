@@ -4,6 +4,17 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SB_URL = "https://stncskqjrmecjckxldvi.supabase.co";
 const SB_KEY = "sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I";
 
+const AIRPORT_NAMES: Record<string, string> = {
+  TLV:'תל אביב',ETH:'אילת',LHR:'לונדון',LGW:'לונדון',CDG:'פריז',ORY:'פריז',
+  FCO:'רומא',MXP:'מילאנו',VCE:'ונציה',BCN:'ברצלונה',MAD:'מדריד',
+  ATH:'אתונה',SKG:'סלוניקי',HER:'כרתים',RHO:'רודוס',JMK:'מיקונוס',JTR:'סנטוריני',
+  BER:'ברלין',MUC:'מינכן',FRA:'פרנקפורט',AMS:'אמסטרדם',VIE:'וינה',ZRH:'ציריך',
+  PRG:'פראג',BUD:'בודפשט',WAW:'ורשה',IST:'איסטנבול',AYT:'אנטליה',
+  JFK:'ניו יורק',LAX:'לוס אנג\'לס',MIA:'מיאמי',BKK:'בנגקוק',DXB:'דובאי',AMM:'עמאן',
+  LCA:'לרנקה',SSH:'שארם א-שייח',HRG:'הורגדה',
+};
+const heCity = (iata: string) => AIRPORT_NAMES[iata] ? `${AIRPORT_NAMES[iata]} (${iata})` : iata;
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -181,7 +192,8 @@ serve(async (req) => {
         `מעולה! הנה קישור התשלום שלך:\n\n` +
         `💳 ${paymentUrl}\n\n` +
         `סכום: ₪${servicePrice}\n` +
-        `✈️ ${request.from_iata} → ${request.to_iata}\n` +
+        `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n` +
+        `🔄 ${request.is_one_way ? 'הלוך בלבד' : 'הלוך ושוב'}\n` +
         `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n` +
         `ברגע שהתשלום יאושר — נשלח לך את כל הפרטים המלאים! 🎉\n\n` +
         `_צייד טיסות ✈️_`;

@@ -234,10 +234,30 @@ serve(async (req) => {
       }
     }
 
-    // Sort by price
-    results.sort((a, b) => (a.price_usd || 9999) - (b.price_usd || 9999));
+    // Deduplicate — same airline + same price + same stops = likely same flight from different engines
+    const seen = new Set<string>();
+    const deduped: any[] = [];
+    for (const r of results) {
+      const key = `${r.airline}|${r.price_usd}|${r.stops}|${r.duration_minutes}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        deduped.push(r);
+      }
+    }
 
-    const cheapest = results.length > 0 ? results[0].price_usd : null;
+    // Sort by price
+    deduped.sort((a, b) => (a.price_usd || 9999) - (b.price_usd || 9999));
+
+    // Engine stats for admin
+    const googleCount = results.filter(r => r.source === "Google Flights").length;
+    const skyCount = results.filter(r => r.source === "Skyscanner").length;
+    let engineStats = `🔎 *מנועי חיפוש:*\n`;
+    if (settings.serpapi_key) engineStats += `  • Google Flights: ${googleCount > 0 ? googleCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
+    if (settings.skyfare_key) engineStats += `  • Skyscanner: ${skyCount > 0 ? skyCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
+    if (!settings.serpapi_key && !settings.skyfare_key) engineStats += `  ⚠️ אין מפתחות API מוגדרים!\n`;
+    engineStats += `  📊 סה"כ: ${deduped.length} תוצאות ייחודיות (מתוך ${results.length})\n`;
+
+    const cheapest = deduped.length > 0 ? deduped[0].price_usd : null;
 
     const isBeat = request.type === "beat";
     let status = "found";
@@ -247,27 +267,43 @@ serve(async (req) => {
     let adminSummary = "";   // Full details — for admin + after payment
     let customerTeaser = ""; // No prices/details — for customer before payment
 
-    if (results.length === 0) {
+    if (deduped.length === 0) {
       status = "not_found";
-      adminSummary = "לא נמצאו תוצאות עבור החיפוש הזה.";
-      customerTeaser = adminSummary;
+      adminSummary = `לא נמצאו תוצאות עבור החיפוש הזה.\n`;
+      adminSummary += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+      adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
+      adminSummary += engineStats;
+      customerTeaser = `שלום ${request.name} 👋\n\n`;
+      customerTeaser += `לצערנו, לא הצלחנו למצוא טיסות עבור החיפוש שלך:\n\n`;
+      customerTeaser += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+      customerTeaser += `🔄 ${tripLabel(request)}\n`;
+      customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
+      customerTeaser += `💡 *טיפים לשיפור החיפוש:*\n`;
+      customerTeaser += `• נסה תאריכים גמישים יותר (±3 ימים)\n`;
+      customerTeaser += `• בדוק שדות תעופה חלופיים באותו אזור\n`;
+      customerTeaser += `• נסה לחפש הלוך בלבד במקום הלוך ושוב\n`;
+      customerTeaser += `• חפש בתקופה שונה — לפעמים שבוע קודם/אחר עושה הבדל גדול\n\n`;
+      customerTeaser += `רוצה לנסות שוב? פשוט שלח בקשה חדשה באתר 🔄\n`;
+      customerTeaser += `כמובן — *ללא חיוב* כי לא מצאנו.\n\n`;
+      customerTeaser += `_צייד טיסות ✈️_`;
     } else if (isBeat) {
       const customerPrice = request.customer_price_usd || 0;
       if (cheapest && cheapest < customerPrice) {
         const saving = customerPrice - cheapest;
         const savingPct = Math.round((saving / customerPrice) * 100);
 
-        // Admin gets full details
+        // Admin gets full details + engine info
         adminSummary = `🎉 מצאנו טיסה זולה יותר!\n\n`;
         adminSummary += `המחיר של הלקוח: $${customerPrice}\n`;
         adminSummary += `המחיר שמצאנו: $${cheapest}\n`;
         adminSummary += `חיסכון: $${saving} (${savingPct}%)\n\n`;
-        for (let i = 0; i < Math.min(5, results.length); i++) {
-          const r = results[i];
-          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | ${r.source}\n`;
+        for (let i = 0; i < Math.min(5, deduped.length); i++) {
+          const r = deduped[i];
+          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | 🔎 ${r.source}\n`;
         }
+        adminSummary += `\n${engineStats}`;
 
-        // Customer gets teaser — price yes, details no
+        // Customer gets teaser — price yes, details no, NO source
         customerTeaser = `🎉 חדשות מעולות!\n\n`;
         customerTeaser += `מצאנו טיסה ב-*$${cheapest}* במקום $${customerPrice} שמצאת!\n`;
         customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n\n`;
@@ -275,8 +311,23 @@ serve(async (req) => {
       } else {
         adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
         adminSummary += `המחיר הזול ביותר שמצאנו: $${cheapest}\n`;
-        adminSummary += `ייתכן שהמחיר שמצא הלקוח הוא כבר הדיל הכי טוב.`;
-        customerTeaser = adminSummary;
+        adminSummary += `ייתכן שהמחיר שמצא הלקוח הוא כבר הדיל הכי טוב.\n\n`;
+        adminSummary += engineStats;
+        customerTeaser = `שלום ${request.name} 👋\n\n`;
+        customerTeaser += `חיפשנו עבורך טיסה זולה יותר מ-*$${customerPrice}* שמצאת:\n\n`;
+        customerTeaser += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+        customerTeaser += `🔄 ${tripLabel(request)}\n`;
+        customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
+        customerTeaser += `לצערנו, המחיר שמצאת הוא כבר מצוין — לא הצלחנו להכות אותו! 👏\n`;
+        customerTeaser += `המחיר הזול ביותר שמצאנו: *$${cheapest}*\n\n`;
+        customerTeaser += `💡 *טיפים שיכולים לעזור:*\n`;
+        customerTeaser += `• נסה תאריכים גמישים (±3 ימים) — הפרשים יכולים להגיע ל-30%\n`;
+        customerTeaser += `• בדוק שדה תעופה חלופי (למשל סטנסטד במקום הית'רו)\n`;
+        customerTeaser += `• נסה טיסה עם עצירה — לפעמים זול משמעותית\n`;
+        customerTeaser += `• הזמן מוקדם — מחירים עולים ככל שמתקרבים לתאריך\n\n`;
+        customerTeaser += `רוצה לנסות שוב עם פרמטרים אחרים? שלח בקשה חדשה 🔄\n`;
+        customerTeaser += `כמובן — *ללא חיוב* כי לא הכינו את המחיר.\n\n`;
+        customerTeaser += `_צייד טיסות ✈️_`;
         status = "not_found";
       }
     } else {
@@ -285,19 +336,20 @@ serve(async (req) => {
       adminSummary += `${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
       adminSummary += `🔄 ${tripLabel(request)}\n`;
       adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      adminSummary += `🏆 5 הדילים הכי טובים:\n\n`;
-      for (let i = 0; i < Math.min(5, results.length); i++) {
-        const r = results[i];
-        adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | ${r.source}\n`;
+      adminSummary += `🏆 ${Math.min(5, deduped.length)} הדילים הכי טובים:\n\n`;
+      for (let i = 0; i < Math.min(5, deduped.length); i++) {
+        const r = deduped[i];
+        adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"} | 🔎 ${r.source}\n`;
       }
-      adminSummary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${results[0].airline}`;
+      adminSummary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${deduped[0].airline}`;
+      adminSummary += `\n\n${engineStats}`;
 
-      // Customer gets teaser — cheapest price yes, full details no
+      // Customer gets teaser — cheapest price yes, full details no, NO source
       customerTeaser = `📊 הדוח שלך מוכן!\n\n`;
       customerTeaser += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
       customerTeaser += `🔄 ${tripLabel(request)}\n`;
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      customerTeaser += `🔍 מצאנו *${results.length} טיסות*\n`;
+      customerTeaser += `🔍 מצאנו *${deduped.length} טיסות*\n`;
       customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n\n`;
       customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.`;
     }
@@ -305,7 +357,7 @@ serve(async (req) => {
     const aiResponse = {
       admin_summary: adminSummary,
       customer_teaser: customerTeaser,
-      results: results.slice(0, 5),
+      results: deduped.slice(0, 5),
       cheapest_price: cheapest,
       search_time: new Date().toISOString(),
       sources_searched: [
@@ -328,6 +380,41 @@ serve(async (req) => {
     const adminApproval = settings.admin_approval === "true";
     const approveUrl = `${SB_URL}/functions/v1/search-flights?action=approve&request_id=${requestId}`;
 
+    // Send "not found" message directly to customer (no payment needed)
+    if (status === "not_found" && settings.green_instance && settings.green_token) {
+      const wa = request.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+      const chatId = `972${wa}@c.us`;
+      try {
+        await fetch(
+          `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: customerTeaser }) }
+        );
+      } catch (e) {
+        console.error("WhatsApp not_found send error:", e);
+      }
+      // Also notify admin
+      if (settings.admin_whatsapp) {
+        const adminWa = settings.admin_whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+        const adminChatId = `972${adminWa}@c.us`;
+        let adminMsg = `⚠️ *חיפוש ללא תוצאות*\n\n`;
+        adminMsg += `👤 ${request.name} (${request.whatsapp})\n`;
+        adminMsg += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+        adminMsg += `🔄 ${tripLabel(request)}\n`;
+        adminMsg += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
+        adminMsg += adminSummary;
+        adminMsg += `\n\n_הלקוח קיבל הודעה עם טיפים לשיפור החיפוש._\n`;
+        adminMsg += `_צייד טיסות ✈️_`;
+        try {
+          await fetch(
+            `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: adminChatId, message: adminMsg }) }
+          );
+        } catch (e) {
+          console.error("Admin not_found notification error:", e);
+        }
+      }
+    }
+
     // If admin approval is enabled, send admin full details + approval link
     if (adminApproval && status === "found") {
       if (settings.green_instance && settings.green_token && settings.admin_whatsapp) {
@@ -338,7 +425,9 @@ serve(async (req) => {
         adminMsg += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
         adminMsg += `🔄 ${tripLabel(request)}\n`;
         adminMsg += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n`;
-        adminMsg += `👥 ${request.adults} נוסעים\n\n`;
+        adminMsg += `👥 ${request.adults} מבוגרים${request.children ? " + " + request.children + " ילדים" : ""}\n`;
+        if (isBeat) adminMsg += `💰 המחיר של הלקוח: $${request.customer_price_usd}${request.customer_price_source ? " (" + request.customer_price_source + ")" : ""}\n`;
+        adminMsg += `\n`;
         adminMsg += adminSummary;
         adminMsg += `\n\n✅ *לאישור ושליחה ללקוח — לחץ כאן:*\n${approveUrl}\n\n`;
         adminMsg += `_צייד טיסות ✈️_`;

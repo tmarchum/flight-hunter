@@ -134,7 +134,7 @@ serve(async (req) => {
             msg += `     ${seg.departure?.id || ""} ${seg.departure?.time || ""} → ${seg.arrival?.id || ""} ${seg.arrival?.time || ""}\n`;
           }
         }
-        msg += `\n🔎 מקור: ${best.source}\n`;
+        msg += `\n`;
         if (best.booking_url) {
           msg += `🔗 *קישור להזמנה:*\n${best.booking_url}\n`;
         }
@@ -151,7 +151,7 @@ serve(async (req) => {
           msg += `*${i + 1}. $${r.price_usd}* — ${r.airline}`;
           msg += ` | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}`;
           if (r.duration_minutes) msg += ` | ${Math.floor(r.duration_minutes / 60)}:${String(r.duration_minutes % 60).padStart(2, "0")}`;
-          msg += ` | ${r.source}\n`;
+          msg += `\n`;
           if (r.departure_time) msg += `   🕐 ${r.departure_time}\n`;
           if (r.booking_url) msg += `   🔗 ${r.booking_url}\n`;
           if (r.booking_token) msg += `   🔗 https://www.google.com/travel/flights/booking?token=${r.booking_token}\n`;
