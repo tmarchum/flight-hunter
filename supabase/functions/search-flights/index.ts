@@ -45,7 +45,7 @@ async function createPaymentLink(settings: any, request: any): Promise<string> {
         },
         Items: [{
           Item: {
-            Name: `tsayad hateisot - ${request.id.slice(0, 8)}`,
+            Name: `\u05E6\u05D9\u05D9\u05D3 \u05D4\u05D8\u05D9\u05E1\u05D5\u05EA - ${request.id.slice(0, 8)}`,
             Price: servicePrice,
             Currency: "ILS",
           },
@@ -420,10 +420,12 @@ serve(async (req) => {
       }
     }
 
-    // Deduplicate — same airline + same stops + same duration = same flight, keep cheapest price
+    // Deduplicate — same airline + same stops + similar duration (±15min) = same flight, keep cheapest
     const dedupMap = new Map<string, any>();
     for (const r of results) {
-      const key = `${r.airline}|${r.stops}|${r.duration_minutes}`;
+      // Round duration to nearest 15 min for better matching
+      const durBucket = Math.round((r.duration_minutes || 0) / 15) * 15;
+      const key = `${r.airline}|${r.stops}|${durBucket}`;
       const existing = dedupMap.get(key);
       if (!existing || r.price_usd < existing.price_usd) {
         dedupMap.set(key, r);
@@ -431,8 +433,12 @@ serve(async (req) => {
     }
     const deduped = Array.from(dedupMap.values());
 
-    // Sort by price
-    deduped.sort((a, b) => (a.price_usd || 9999) - (b.price_usd || 9999));
+    // Sort: directs first, then by price
+    deduped.sort((a, b) => {
+      if (a.stops === 0 && b.stops > 0) return -1;
+      if (a.stops > 0 && b.stops === 0) return 1;
+      return (a.price_usd || 9999) - (b.price_usd || 9999);
+    });
 
     // Engine stats for admin
     const googleCount = results.filter(r => r.source === "Google Flights").length;
@@ -452,16 +458,46 @@ serve(async (req) => {
     // Find cheapest direct vs cheapest connection for smart recommendation
     const cheapestDirect = deduped.find(r => r.stops === 0);
     const cheapestConnection = deduped.find(r => r.stops > 0 && (r.price_usd < (cheapestDirect?.price_usd || Infinity)));
+
+    // Build detailed connection recommendation
+    const fmtDur = (m: number) => `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`;
     let connectionTip = "";
+    let connectionTipCustomer = "";
     if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
       const connSaving = cheapestDirect.price_usd - cheapestConnection.price_usd;
       const connPct = Math.round((connSaving / cheapestDirect.price_usd) * 100);
       if (connSaving >= 20 && connPct >= 10) {
-        connectionTip = `\n💡 *טיסה עם קונקשן ב-$${cheapestConnection.price_usd}* — חיסכון של $${connSaving} (${connPct}%) לעומת ישירה ב-$${cheapestDirect.price_usd}`;
-        if (cheapestConnection.is_virtual_interline) {
-          connectionTip += ` 🔗 (שילוב חברות: ${cheapestConnection.airline})`;
+        // Admin version — full details
+        connectionTip = `\n🔗 *המלצת קונקשן — חיסכון $${connSaving} (${connPct}%):*\n`;
+        connectionTip += `💰 *$${cheapestConnection.price_usd}* במקום $${cheapestDirect.price_usd} ישיר\n`;
+        connectionTip += `✈️ ${cheapestConnection.airline}\n`;
+        connectionTip += `⏱️ זמן כולל: ${fmtDur(cheapestConnection.duration_minutes)} שעות\n`;
+        if (cheapestConnection.flights_detail && cheapestConnection.flights_detail.length > 0) {
+          for (let si = 0; si < cheapestConnection.flights_detail.length; si++) {
+            const seg = cheapestConnection.flights_detail[si];
+            connectionTip += `  ${si+1}. ${seg.airline} ${seg.flight_number || ''} | ${seg.departure?.id || ''} ${seg.departure?.time?.slice(11,16) || ''} → ${seg.arrival?.id || ''} ${seg.arrival?.time?.slice(11,16) || ''}`;
+            if (seg.duration) connectionTip += ` (${fmtDur(seg.duration)})`;
+            connectionTip += `\n`;
+            // Layover time between segments
+            if (si < cheapestConnection.flights_detail.length - 1) {
+              const nextSeg = cheapestConnection.flights_detail[si+1];
+              const arrTime = new Date(seg.arrival?.time || 0).getTime();
+              const depTime = new Date(nextSeg.departure?.time || 0).getTime();
+              if (arrTime && depTime && depTime > arrTime) {
+                const layoverMin = Math.round((depTime - arrTime) / 60000);
+                connectionTip += `     ⏳ המתנה: ${fmtDur(layoverMin)} שעות\n`;
+              }
+            }
+          }
         }
-        connectionTip += `\n`;
+        if (cheapestConnection.is_virtual_interline) {
+          connectionTip += `  🔗 שילוב חברות — self-transfer\n`;
+        }
+
+        // Customer version — summary only
+        connectionTipCustomer = `\n💡 *יש גם קונקשן חכם ב-$${cheapestConnection.price_usd}*\n`;
+        connectionTipCustomer += `חיסכון של $${connSaving} (${connPct}%) לעומת ישירה\n`;
+        connectionTipCustomer += `${cheapestConnection.stops} עצירות | ${fmtDur(cheapestConnection.duration_minutes)} שעות\n`;
       }
     }
 
@@ -515,12 +551,7 @@ serve(async (req) => {
         customerTeaser = `🎉 חדשות מעולות!\n\n`;
         customerTeaser += `מצאנו טיסה ב-*$${cheapest}* במקום $${customerPrice} שמצאת!\n`;
         customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n`;
-        if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
-          const cs = cheapestDirect.price_usd - cheapestConnection.price_usd;
-          if (cs >= 20) {
-            customerTeaser += `\n💡 *מצאנו גם קונקשן חכם* שחוסך $${cs} לעומת טיסה ישירה!\n`;
-          }
-        }
+        customerTeaser += connectionTipCustomer;
         customerTeaser += `\nלקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.\n\n`;
         customerTeaser += `📋 מספר בקשה: ${requestId}`;
       } else {
@@ -552,14 +583,25 @@ serve(async (req) => {
       adminSummary += `${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
       adminSummary += `🔄 ${tripLabel(request)}\n`;
       adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      adminSummary += `🏆 ${Math.min(5, deduped.length)} הדילים הכי טובים:\n\n`;
-      for (let i = 0; i < Math.min(5, deduped.length); i++) {
-        const r = deduped[i];
-        adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
+      const directResults = deduped.filter(r => r.stops === 0);
+      const connResults = deduped.filter(r => r.stops > 0);
+
+      if (directResults.length > 0) {
+        adminSummary += `✈️ *טיסות ישירות:*\n\n`;
+        for (let i = 0; i < Math.min(5, directResults.length); i++) {
+          const r = directResults[i];
+          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${fmtDur(r.duration_minutes)} | 🔎 ${r.source}\n`;
+        }
       }
-      adminSummary += `\n💡 המלצה: הדיל הטוב ביותר הוא $${cheapest} עם ${deduped[0].airline}`;
+      if (connResults.length > 0) {
+        adminSummary += `\n🔗 *טיסות עם קונקשן:*\n\n`;
+        for (let i = 0; i < Math.min(3, connResults.length); i++) {
+          const r = connResults[i];
+          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops} עצירות | ${fmtDur(r.duration_minutes)}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
+        }
+      }
       adminSummary += connectionTip;
-      adminSummary += `\n\n${engineStats}`;
+      adminSummary += `\n${engineStats}`;
 
       // Customer gets teaser — cheapest price yes, full details no, NO source
       customerTeaser = `📊 הדוח שלך מוכן!\n\n`;
@@ -568,12 +610,7 @@ serve(async (req) => {
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
       customerTeaser += `🔍 מצאנו *${deduped.length} טיסות*\n`;
       customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n`;
-      if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
-        const cs = cheapestDirect.price_usd - cheapestConnection.price_usd;
-        if (cs >= 20) {
-          customerTeaser += `\n💡 *מצאנו גם קונקשן חכם* שחוסך $${cs} לעומת טיסה ישירה!\n`;
-        }
-      }
+      customerTeaser += connectionTipCustomer;
       customerTeaser += `\n`;
       customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.\n\n`;
       customerTeaser += `📋 מספר בקשה: ${requestId}`;

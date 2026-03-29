@@ -157,7 +157,7 @@ serve(async (req) => {
             Items: [
               {
                 Item: {
-                  Name: `tsayad hateisot - ${request.id.slice(0, 8)}`,
+                  Name: `\u05E6\u05D9\u05D9\u05D3 \u05D4\u05D8\u05D9\u05E1\u05D5\u05EA - ${request.id.slice(0, 8)}`,
                   Price: servicePrice,
                   Currency: "ILS",
                 },
