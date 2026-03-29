@@ -80,7 +80,12 @@ async function sendTeaserWithPayment(sb: any, settings: any, request: any, tease
     // Test mode — send teaser, then auto-pay and send full details
     let msg = `שלום ${request.name} 👋\n\n`;
     msg += teaser;
-    msg += `\n\n🧪 *מצב טסט* — תשלום אוטומטי\n`;
+    msg += `\n\n⚠️ *שים לב:*\n`;
+    msg += `• המחירים נכונים לרגע החיפוש ועשויים להשתנות\n`;
+    msg += `• אנחנו מאתרים טיסות — ההזמנה מתבצעת ישירות מול חברת התעופה או אתר ההזמנות\n`;
+    msg += `• המחירים כוללים מס ועמלות ידועות אך עלולים להשתנות בעת ההזמנה\n`;
+    msg += `• כבודה, בחירת מושב ותוספות נוספות עשויים להיות בתשלום נפרד\n`;
+    msg += `\n🧪 *מצב טסט* — תשלום אוטומטי\n`;
     msg += `_צייד טיסות ✈️_`;
     await fetch(
       `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
@@ -104,11 +109,20 @@ async function sendTeaserWithPayment(sb: any, settings: any, request: any, tease
     return;
   }
 
+  // Disclaimers
+  const disclaimers =
+    `\n\n⚠️ *שים לב:*\n` +
+    `• המחירים נכונים לרגע החיפוש ועשויים להשתנות\n` +
+    `• אנחנו מאתרים טיסות — ההזמנה מתבצעת ישירות מול חברת התעופה או אתר ההזמנות\n` +
+    `• המחירים כוללים מס ועמלות ידועות אך עלולים להשתנות בעת ההזמנה\n` +
+    `• כבודה, בחירת מושב ותוספות נוספות עשויים להיות בתשלום נפרד\n`;
+
   // Production — create SUMIT link and send with teaser
   const paymentUrl = await createPaymentLink(settings, request);
   let msg = `שלום ${request.name} 👋\n\n`;
   msg += teaser;
-  msg += `\n\n💳 *לתשלום ₪${servicePrice} וקבלת הפרטים המלאים:*\n`;
+  msg += disclaimers;
+  msg += `\n💳 *לתשלום ₪${servicePrice} וקבלת הפרטים המלאים:*\n`;
   if (paymentUrl) {
     msg += `${paymentUrl}\n`;
   } else {
