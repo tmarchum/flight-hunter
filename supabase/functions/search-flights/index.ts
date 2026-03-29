@@ -200,316 +200,412 @@ serve(async (req) => {
     // Update status to searching
     await sb.from("requests").update({ status: "searching" }).eq("id", requestId);
 
-    // ---------- Search flights from multiple sources ----------
-    const results: any[] = [];
+    // ---------- VIP requests — notify admin with free text, no search ----------
+    if (request.type === "vip") {
+      await sb.from("requests").update({
+        status: "found",
+        ai_response: { admin_summary: `👑 *בקשת VIP*\n\n${request.notes || '(ללא פרטים)'}`, customer_teaser: "", results: [] },
+      }).eq("id", requestId);
 
-    // 1. SerpApi (Google Flights)
-    if (settings.serpapi_key) {
-      try {
-        const departDate = request.depart_date;
-        const returnDate = request.return_date;
-        const params = new URLSearchParams({
-          engine: "google_flights",
-          departure_id: request.from_iata,
-          arrival_id: request.to_iata,
-          outbound_date: departDate,
-          type: request.is_one_way ? "2" : "1",
-          adults: String(request.adults),
-          children: String(request.children || 0),
-          currency: "USD",
-          api_key: settings.serpapi_key,
-        });
-        if (returnDate && !request.is_one_way) {
-          params.set("return_date", returnDate);
-        }
-
-        const serpResp = await fetch(`https://serpapi.com/search.json?${params}`);
-        const serpData = await serpResp.json();
-
-        const bestFlights = serpData.best_flights || [];
-        const otherFlights = serpData.other_flights || [];
-        const allFlights = [...bestFlights, ...otherFlights];
-
-        for (const flight of allFlights.slice(0, 5)) {
-          const firstLeg = flight.flights?.[0];
-          const lastLeg = flight.flights?.[flight.flights?.length - 1];
-          results.push({
-            source: "Google Flights",
-            price_usd: flight.price,
-            airline: firstLeg?.airline || "Unknown",
-            stops: flight.flights ? flight.flights.length - 1 : 0,
-            duration_minutes: flight.total_duration,
-            departure_time: firstLeg?.departure_airport?.time || "",
-            arrival_time: lastLeg?.arrival_airport?.time || "",
-            departure_airport: firstLeg?.departure_airport?.name || "",
-            arrival_airport: lastLeg?.arrival_airport?.name || "",
-            booking_token: flight.booking_token || null,
-            layovers: flight.layovers || [],
-            flights_detail: (flight.flights || []).map((f: any) => ({
-              airline: f.airline,
-              flight_number: f.flight_number,
-              airplane: f.airplane,
-              departure: f.departure_airport,
-              arrival: f.arrival_airport,
-              duration: f.duration,
-              legroom: f.legroom,
-            })),
-          });
-        }
-      } catch (e) {
-        console.error("SerpApi error:", e);
-      }
-    }
-
-    // 2. Skyscanner via Flights Scraper Sky (RapidAPI)
-    if (settings.skyfare_key) {
-      try {
-        const rapidApiKey = settings.skyfare_key;
-        const searchType = request.is_one_way ? "search-one-way" : "search-roundtrip";
-        const skyParams: any = {
-          fromEntityId: request.from_iata,
-          toEntityId: request.to_iata,
-          departDate: request.depart_date,
-          adults: String(request.adults),
-          currency: "USD",
-        };
-        if (!request.is_one_way && request.return_date) {
-          skyParams.returnDate = request.return_date;
-        }
-        const qs = new URLSearchParams(skyParams).toString();
-
-        const skyResp = await fetch(
-          `https://flights-sky.p.rapidapi.com/flights/${searchType}?${qs}`,
-          {
-            headers: {
-              "X-RapidAPI-Key": rapidApiKey,
-              "X-RapidAPI-Host": "flights-sky.p.rapidapi.com",
-            },
-          }
+      if (settings.green_instance && settings.green_token) {
+        // Confirm to customer
+        const wa = request.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+        const chatId = `972${wa}@c.us`;
+        let custMsg = `שלום ${request.name} 👋\n\n`;
+        custMsg += `👑 *בקשת ה-VIP שלך התקבלה!*\n\n`;
+        custMsg += `סוכן אישי יבדוק את הבקשה ויחזור אליך בהקדם.\n\n`;
+        custMsg += `📋 מספר בקשה: ${requestId}\n`;
+        custMsg += `_צייד טיסות ✈️_`;
+        await fetch(
+          `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: custMsg }) }
         );
 
-        if (skyResp.ok) {
-          const skyData = await skyResp.json();
-          const itineraries = skyData.data?.itineraries || [];
+        // Notify admin
+        if (settings.admin_whatsapp) {
+          const adminWa = settings.admin_whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+          const adminChatId = `972${adminWa}@c.us`;
+          let adminMsg = `👑 *בקשת VIP חדשה!*\n\n`;
+          adminMsg += `👤 ${request.name} (${request.whatsapp})\n`;
+          if (request.email) adminMsg += `📧 ${request.email}\n`;
+          adminMsg += `\n📝 *תוכן הבקשה:*\n${request.notes || '(ללא פרטים)'}\n\n`;
+          adminMsg += `💰 מחיר VIP: ₪${settings.vip_price || '299'}\n`;
+          adminMsg += `📋 בקשה: ${requestId}\n\n`;
+          adminMsg += `_צייד טיסות ✈️_`;
+          await fetch(
+            `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+            { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: adminChatId, message: adminMsg }) }
+          );
+        }
+      }
 
-          for (const itin of itineraries.slice(0, 5)) {
-            const legs = itin.legs || [];
-            const firstLeg = legs[0];
-            results.push({
-              source: "Skyscanner",
-              price_usd: Math.round(itin.price?.raw || 0),
-              airline: firstLeg?.carriers?.marketing?.[0]?.name || "Unknown",
-              stops: firstLeg?.stopCount || 0,
-              duration_minutes: firstLeg?.durationInMinutes || 0,
-              departure_time: firstLeg?.departure || "",
-              arrival_time: firstLeg?.arrival || "",
-              departure_airport: firstLeg?.origin?.name || "",
-              arrival_airport: firstLeg?.destination?.name || "",
-              booking_url: null,
-              flights_detail: (firstLeg?.segments || []).map((s: any) => ({
-                airline: s.operatingCarrier?.name || firstLeg?.carriers?.marketing?.[0]?.name,
-                flight_number: s.flightNumber || "",
-                departure: { id: s.origin?.flightPlaceId, name: s.origin?.name, time: s.departure },
-                arrival: { id: s.destination?.flightPlaceId, name: s.destination?.name, time: s.arrival },
-                duration: s.durationInMinutes,
+      return new Response(JSON.stringify({ success: true, status: "found", type: "vip" }), {
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // ---------- Search flights from multiple sources ----------
+    // For round-trip, search each direction separately as one-way
+    const isRoundTrip = !request.is_one_way && request.return_date;
+    const directions = isRoundTrip
+      ? [
+          { from: request.from_iata, to: request.to_iata, date: request.depart_date, label: "הלוך" },
+          { from: request.to_iata, to: request.from_iata, date: request.return_date, label: "חזור" },
+        ]
+      : [
+          { from: request.from_iata, to: request.to_iata, date: request.depart_date, label: "הלוך" },
+        ];
+
+    // Search function for a single direction (always one-way)
+    async function searchOneDirection(from: string, to: string, date: string): Promise<any[]> {
+      const dirResults: any[] = [];
+
+      // 1. SerpApi (Google Flights) — always type=2 (one-way)
+      if (settings.serpapi_key) {
+        try {
+          const params = new URLSearchParams({
+            engine: "google_flights",
+            departure_id: from,
+            arrival_id: to,
+            outbound_date: date,
+            type: "2",
+            adults: String(request.adults),
+            children: String(request.children || 0),
+            currency: "USD",
+            api_key: settings.serpapi_key,
+          });
+
+          const serpResp = await fetch(`https://serpapi.com/search.json?${params}`);
+          const serpData = await serpResp.json();
+
+          const bestFlights = serpData.best_flights || [];
+          const otherFlights = serpData.other_flights || [];
+          const allFlights = [...bestFlights, ...otherFlights];
+
+          for (const flight of allFlights.slice(0, 5)) {
+            const firstLeg = flight.flights?.[0];
+            const lastLeg = flight.flights?.[flight.flights?.length - 1];
+            const airline = firstLeg?.airline || "";
+            if (!airline || airline === "Unknown") continue; // skip unknown airlines
+            dirResults.push({
+              source: "Google Flights",
+              price_usd: flight.price,
+              airline,
+              stops: flight.flights ? flight.flights.length - 1 : 0,
+              duration_minutes: flight.total_duration,
+              departure_time: firstLeg?.departure_airport?.time || "",
+              arrival_time: lastLeg?.arrival_airport?.time || "",
+              departure_airport: firstLeg?.departure_airport?.name || "",
+              arrival_airport: lastLeg?.arrival_airport?.name || "",
+              booking_token: flight.booking_token || null,
+              layovers: flight.layovers || [],
+              flights_detail: (flight.flights || []).map((f: any) => ({
+                airline: f.airline,
+                flight_number: f.flight_number,
+                airplane: f.airplane,
+                departure: f.departure_airport,
+                arrival: f.arrival_airport,
+                duration: f.duration,
+                legroom: f.legroom,
               })),
             });
           }
-        } else {
-          console.error("Skyscanner API error:", skyResp.status, await skyResp.text());
+        } catch (e) {
+          console.error("SerpApi error:", e);
         }
-      } catch (e) {
-        console.error("Skyscanner/RapidAPI error:", e);
       }
-    }
 
-    // 3. Kiwi.com via RapidAPI
-    if (settings.skyfare_key) {
-      try {
-        const rapidApiKey = settings.skyfare_key;
-        const kiwiEndpoint = request.is_one_way ? "one-way" : "round-trip";
-        // Kiwi API requires adultsHoldBags/adultsHandBags per-adult for adults>1,
-        // so we always query with adults=1 and multiply price by total passengers
-        const totalPax = (request.adults || 1) + (request.children || 0);
-        const kiwiParams: Record<string, string> = {
-          source: `City:${request.from_iata}`,
-          destination: `City:${request.to_iata}`,
-          currency: "usd",
-          locale: "en",
-          adults: "1",
-          children: "0",
-          infants: "0",
-          handbags: "1",
-          holdbags: "0",
-          cabinClass: "ECONOMY",
-          sortBy: "PRICE",
-          sortOrder: "ASCENDING",
-          limit: "10",
-          transportTypes: "FLIGHT",
-          // Virtual interlining — Kiwi's strength: combine different airlines
-          enableSelfTransfer: "true",
-          allowDifferentStationConnection: "true",
-          allowOvernightStopover: "true",
-          enableThrowAwayTicketing: "true",
-          allowChangeInboundSource: "true",
-          allowChangeInboundDestination: "true",
-          applyMixedClasses: "true",
-          allowReturnFromDifferentCity: "true",
-        };
-        if (!request.is_one_way) {
-          kiwiParams.outbound = "SUNDAY,MONDAY,TUESDAY,WEDNESDAY,THURSDAY,FRIDAY,SATURDAY";
-        }
+      // 2. Skyscanner via Flights Scraper Sky (RapidAPI) — always one-way
+      if (settings.skyfare_key) {
+        try {
+          const rapidApiKey = settings.skyfare_key;
+          const skyParams: any = {
+            fromEntityId: from,
+            toEntityId: to,
+            departDate: date,
+            adults: String(request.adults),
+            currency: "USD",
+          };
+          const qs = new URLSearchParams(skyParams).toString();
 
-        const kiwiResp = await fetch(
-          `https://kiwi-com-cheap-flights.p.rapidapi.com/${kiwiEndpoint}?${new URLSearchParams(kiwiParams)}`,
-          {
-            headers: {
-              "Content-Type": "application/json",
-              "X-RapidAPI-Key": rapidApiKey,
-              "X-RapidAPI-Host": "kiwi-com-cheap-flights.p.rapidapi.com",
-            },
+          const skyResp = await fetch(
+            `https://flights-sky.p.rapidapi.com/flights/search-one-way?${qs}`,
+            {
+              headers: {
+                "X-RapidAPI-Key": rapidApiKey,
+                "X-RapidAPI-Host": "flights-sky.p.rapidapi.com",
+              },
+            }
+          );
+
+          if (skyResp.ok) {
+            const skyData = await skyResp.json();
+            const itineraries = skyData.data?.itineraries || [];
+
+            for (const itin of itineraries.slice(0, 5)) {
+              const legs = itin.legs || [];
+              const firstLeg = legs[0];
+              const airline = firstLeg?.carriers?.marketing?.[0]?.name || "";
+              if (!airline || airline === "Unknown") continue;
+              dirResults.push({
+                source: "Skyscanner",
+                price_usd: Math.round(itin.price?.raw || 0),
+                airline,
+                stops: firstLeg?.stopCount || 0,
+                duration_minutes: firstLeg?.durationInMinutes || 0,
+                departure_time: firstLeg?.departure || "",
+                arrival_time: firstLeg?.arrival || "",
+                departure_airport: firstLeg?.origin?.name || "",
+                arrival_airport: firstLeg?.destination?.name || "",
+                booking_url: null,
+                flights_detail: (firstLeg?.segments || []).map((s: any) => ({
+                  airline: s.operatingCarrier?.name || firstLeg?.carriers?.marketing?.[0]?.name,
+                  flight_number: s.flightNumber || "",
+                  departure: { id: s.origin?.flightPlaceId, name: s.origin?.name, time: s.departure },
+                  arrival: { id: s.destination?.flightPlaceId, name: s.destination?.name, time: s.arrival },
+                  duration: s.durationInMinutes,
+                })),
+              });
+            }
+          } else {
+            console.error("Skyscanner API error:", skyResp.status, await skyResp.text());
           }
-        );
-
-        if (kiwiResp.ok) {
-          const kiwiData = await kiwiResp.json();
-          const itineraries = kiwiData.itineraries || [];
-          for (const itin of itineraries.slice(0, 5)) {
-            const outbound = itin.outbound || {};
-            const sectorSegs = outbound.sectorSegments || [];
-            const firstSeg = sectorSegs[0]?.segment || {};
-            const lastSeg = sectorSegs[sectorSegs.length - 1]?.segment || firstSeg;
-            const pricePerPerson = parseFloat(itin.price?.amount || "0");
-            const priceUsd = pricePerPerson * totalPax;
-            const durationSec = outbound.duration || 0;
-
-            const segAirlines = sectorSegs.map((ss: any) => ss.segment?.carrier?.name).filter(Boolean);
-            const uniqueAirlines = [...new Set(segAirlines)];
-            const isVirtualInterline = uniqueAirlines.length > 1;
-            const airlineLabel = isVirtualInterline ? uniqueAirlines.join(" + ") : (firstSeg.carrier?.name || "Unknown");
-
-            results.push({
-              source: "Kiwi.com",
-              price_usd: Math.round(priceUsd),
-              airline: airlineLabel,
-              is_virtual_interline: isVirtualInterline,
-              stops: Math.max(0, sectorSegs.length - 1),
-              duration_minutes: Math.round(durationSec / 60),
-              departure_time: firstSeg.source?.localTime || "",
-              arrival_time: lastSeg.destination?.localTime || "",
-              departure_airport: firstSeg.source?.station?.name || "",
-              arrival_airport: lastSeg.destination?.station?.name || "",
-              booking_url: null,
-              flights_detail: sectorSegs.map((ss: any) => {
-                const seg = ss.segment || {};
-                return {
-                  airline: seg.carrier?.name || "",
-                  flight_number: `${seg.carrier?.code || ""}${seg.code || ""}`,
-                  departure: { id: seg.source?.station?.code, time: seg.source?.localTime },
-                  arrival: { id: seg.destination?.station?.code, time: seg.destination?.localTime },
-                  duration: Math.round((seg.duration || 0) / 60),
-                };
-              }),
-            });
-          }
-        } else {
-          console.error("Kiwi API error:", kiwiResp.status, await kiwiResp.text());
+        } catch (e) {
+          console.error("Skyscanner/RapidAPI error:", e);
         }
-      } catch (e) {
-        console.error("Kiwi/RapidAPI error:", e);
       }
+
+      // 3. Kiwi.com via RapidAPI — always one-way
+      if (settings.skyfare_key) {
+        try {
+          const rapidApiKey = settings.skyfare_key;
+          const totalPax = (request.adults || 1) + (request.children || 0);
+          const kiwiParams: Record<string, string> = {
+            source: `City:${from}`,
+            destination: `City:${to}`,
+            departureDate: date,
+            currency: "usd",
+            locale: "en",
+            adults: "1",
+            children: "0",
+            infants: "0",
+            handbags: "1",
+            holdbags: "0",
+            cabinClass: "ECONOMY",
+            sortBy: "PRICE",
+            sortOrder: "ASCENDING",
+            limit: "10",
+            transportTypes: "FLIGHT",
+            enableSelfTransfer: "true",
+            allowDifferentStationConnection: "true",
+            allowOvernightStopover: "true",
+            enableThrowAwayTicketing: "true",
+            allowChangeInboundSource: "true",
+            allowChangeInboundDestination: "true",
+            applyMixedClasses: "true",
+            allowReturnFromDifferentCity: "true",
+          };
+
+          const kiwiResp = await fetch(
+            `https://kiwi-com-cheap-flights.p.rapidapi.com/one-way?${new URLSearchParams(kiwiParams)}`,
+            {
+              headers: {
+                "Content-Type": "application/json",
+                "X-RapidAPI-Key": rapidApiKey,
+                "X-RapidAPI-Host": "kiwi-com-cheap-flights.p.rapidapi.com",
+              },
+            }
+          );
+
+          if (kiwiResp.ok) {
+            const kiwiData = await kiwiResp.json();
+            const itineraries = kiwiData.itineraries || [];
+            for (const itin of itineraries.slice(0, 5)) {
+              const outbound = itin.outbound || {};
+              const sectorSegs = outbound.sectorSegments || [];
+              const firstSeg = sectorSegs[0]?.segment || {};
+              const lastSeg = sectorSegs[sectorSegs.length - 1]?.segment || firstSeg;
+              const pricePerPerson = parseFloat(itin.price?.amount || "0");
+              const priceUsd = pricePerPerson * totalPax;
+              const durationSec = outbound.duration || 0;
+
+              const segAirlines = sectorSegs.map((ss: any) => ss.segment?.carrier?.name).filter(Boolean);
+              const uniqueAirlines = [...new Set(segAirlines)];
+              const isVirtualInterline = uniqueAirlines.length > 1;
+              const airlineLabel = isVirtualInterline ? uniqueAirlines.join(" + ") : (firstSeg.carrier?.name || "");
+              if (!airlineLabel) continue; // skip unknown airlines
+
+              dirResults.push({
+                source: "Kiwi.com",
+                price_usd: Math.round(priceUsd),
+                airline: airlineLabel,
+                is_virtual_interline: isVirtualInterline,
+                stops: Math.max(0, sectorSegs.length - 1),
+                duration_minutes: Math.round(durationSec / 60),
+                departure_time: firstSeg.source?.localTime || "",
+                arrival_time: lastSeg.destination?.localTime || "",
+                departure_airport: firstSeg.source?.station?.name || "",
+                arrival_airport: lastSeg.destination?.station?.name || "",
+                booking_url: null,
+                flights_detail: sectorSegs.map((ss: any) => {
+                  const seg = ss.segment || {};
+                  return {
+                    airline: seg.carrier?.name || "",
+                    flight_number: `${seg.carrier?.code || ""}${seg.code || ""}`,
+                    departure: { id: seg.source?.station?.code, time: seg.source?.localTime },
+                    arrival: { id: seg.destination?.station?.code, time: seg.destination?.localTime },
+                    duration: Math.round((seg.duration || 0) / 60),
+                  };
+                }),
+              });
+            }
+          } else {
+            console.error("Kiwi API error:", kiwiResp.status, await kiwiResp.text());
+          }
+        } catch (e) {
+          console.error("Kiwi/RapidAPI error:", e);
+        }
+      }
+
+      return dirResults;
     }
 
-    // Deduplicate — same airline + same stops + similar duration (±15min) = same flight, keep cheapest
-    const dedupMap = new Map<string, any>();
-    for (const r of results) {
-      // Round duration to nearest 15 min for better matching
-      const durBucket = Math.round((r.duration_minutes || 0) / 15) * 15;
-      const key = `${r.airline}|${r.stops}|${durBucket}`;
-      const existing = dedupMap.get(key);
-      if (!existing || r.price_usd < existing.price_usd) {
-        dedupMap.set(key, r);
+    // Helper: deduplicate and sort results for one direction
+    function deduplicateAndSort(rawResults: any[]): any[] {
+      const dedupMap = new Map<string, any>();
+      for (const r of rawResults) {
+        const durBucket = Math.round((r.duration_minutes || 0) / 15) * 15;
+        const key = `${r.airline}|${r.stops}|${durBucket}`;
+        const existing = dedupMap.get(key);
+        if (!existing || r.price_usd < existing.price_usd) {
+          dedupMap.set(key, r);
+        }
       }
+      const deduped = Array.from(dedupMap.values());
+      // Sort: directs first, then by price
+      deduped.sort((a, b) => {
+        if (a.stops === 0 && b.stops > 0) return -1;
+        if (a.stops > 0 && b.stops === 0) return 1;
+        return (a.price_usd || 9999) - (b.price_usd || 9999);
+      });
+      // Only keep connections that are cheaper than cheapest direct
+      const cheapestDirectPrice = deduped.find(r => r.stops === 0)?.price_usd;
+      if (cheapestDirectPrice) {
+        return deduped.filter(r => r.stops === 0 || r.price_usd < cheapestDirectPrice);
+      }
+      return deduped;
     }
-    const deduped = Array.from(dedupMap.values());
 
-    // Sort: directs first, then by price
-    deduped.sort((a, b) => {
-      if (a.stops === 0 && b.stops > 0) return -1;
-      if (a.stops > 0 && b.stops === 0) return 1;
-      return (a.price_usd || 9999) - (b.price_usd || 9999);
+    // Search all directions in parallel
+    const directionResults: { dir: typeof directions[0], raw: any[], deduped: any[] }[] = [];
+    const searchPromises = directions.map(async (dir) => {
+      const raw = await searchOneDirection(dir.from, dir.to, dir.date);
+      const deduped = deduplicateAndSort(raw);
+      return { dir, raw, deduped };
     });
+    const searchResults = await Promise.all(searchPromises);
+    directionResults.push(...searchResults);
+
+    // Flatten all results for stats
+    const allRawResults = directionResults.flatMap(d => d.raw);
+    const allDeduped = directionResults.flatMap(d => d.deduped);
 
     // Engine stats for admin
-    const googleCount = results.filter(r => r.source === "Google Flights").length;
-    const skyCount = results.filter(r => r.source === "Skyscanner").length;
-    const kiwiCount = results.filter(r => r.source === "Kiwi.com").length;
+    const googleCount = allRawResults.filter(r => r.source === "Google Flights").length;
+    const skyCount = allRawResults.filter(r => r.source === "Skyscanner").length;
+    const kiwiCount = allRawResults.filter(r => r.source === "Kiwi.com").length;
     let engineStats = `🔎 *מנועי חיפוש:*\n`;
     if (settings.serpapi_key) engineStats += `  • Google Flights: ${googleCount > 0 ? googleCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
     if (settings.skyfare_key) engineStats += `  • Skyscanner: ${skyCount > 0 ? skyCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
     if (settings.skyfare_key) engineStats += `  • Kiwi.com: ${kiwiCount > 0 ? kiwiCount + " תוצאות" : "❌ ללא תוצאות"}\n`;
     if (!settings.serpapi_key && !settings.skyfare_key) engineStats += `  ⚠️ אין מפתחות API מוגדרים!\n`;
-    const viCount = deduped.filter(r => r.is_virtual_interline).length;
+    const viCount = allDeduped.filter(r => r.is_virtual_interline).length;
     if (viCount > 0) engineStats += `  🔗 קונקשנים חכמים (Virtual Interline): ${viCount}\n`;
-    engineStats += `  📊 סה"כ: ${deduped.length} תוצאות ייחודיות (מתוך ${results.length})\n`;
+    engineStats += `  📊 סה"כ: ${allDeduped.length} תוצאות ייחודיות (מתוך ${allRawResults.length})\n`;
 
-    const cheapest = deduped.length > 0 ? deduped[0].price_usd : null;
-
-    // Find cheapest direct vs cheapest connection for smart recommendation
-    const cheapestDirect = deduped.find(r => r.stops === 0);
-    const cheapestConnection = deduped.find(r => r.stops > 0 && (r.price_usd < (cheapestDirect?.price_usd || Infinity)));
-
-    // Build detailed connection recommendation
     const fmtDur = (m: number) => `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`;
-    let connectionTip = "";
-    let connectionTipCustomer = "";
-    if (cheapestDirect && cheapestConnection && cheapestConnection.price_usd < cheapestDirect.price_usd) {
-      const connSaving = cheapestDirect.price_usd - cheapestConnection.price_usd;
-      const connPct = Math.round((connSaving / cheapestDirect.price_usd) * 100);
-      if (connSaving >= 20 && connPct >= 10) {
-        // Admin version — full details
-        connectionTip = `\n🔗 *המלצת קונקשן — חיסכון $${connSaving} (${connPct}%):*\n`;
-        connectionTip += `💰 *$${cheapestConnection.price_usd}* במקום $${cheapestDirect.price_usd} ישיר\n`;
-        connectionTip += `✈️ ${cheapestConnection.airline}\n`;
-        connectionTip += `⏱️ זמן כולל: ${fmtDur(cheapestConnection.duration_minutes)} שעות\n`;
-        if (cheapestConnection.flights_detail && cheapestConnection.flights_detail.length > 0) {
-          for (let si = 0; si < cheapestConnection.flights_detail.length; si++) {
-            const seg = cheapestConnection.flights_detail[si];
-            connectionTip += `  ${si+1}. ${seg.airline} ${seg.flight_number || ''} | ${seg.departure?.id || ''} ${seg.departure?.time?.slice(11,16) || ''} → ${seg.arrival?.id || ''} ${seg.arrival?.time?.slice(11,16) || ''}`;
-            if (seg.duration) connectionTip += ` (${fmtDur(seg.duration)})`;
-            connectionTip += `\n`;
-            // Layover time between segments
-            if (si < cheapestConnection.flights_detail.length - 1) {
-              const nextSeg = cheapestConnection.flights_detail[si+1];
-              const arrTime = new Date(seg.arrival?.time || 0).getTime();
-              const depTime = new Date(nextSeg.departure?.time || 0).getTime();
-              if (arrTime && depTime && depTime > arrTime) {
-                const layoverMin = Math.round((depTime - arrTime) / 60000);
-                connectionTip += `     ⏳ המתנה: ${fmtDur(layoverMin)} שעות\n`;
+
+    // Helper: build per-direction summary sections
+    function buildDirectionSummary(deduped: any[], dirLabel: string, fromIata: string, toIata: string, date: string) {
+      let admin = "";
+      let customer = "";
+      const cheapest = deduped.length > 0 ? deduped[0] : null;
+      const directResults = deduped.filter(r => r.stops === 0);
+      const connResults = deduped.filter(r => r.stops > 0);
+
+      admin += `\n✈️ *${dirLabel}: ${heCity(fromIata)} → ${heCity(toIata)}* (${date})\n\n`;
+      if (directResults.length > 0) {
+        admin += `🛫 *טיסות ישירות:*\n`;
+        for (let i = 0; i < Math.min(5, directResults.length); i++) {
+          const r = directResults[i];
+          admin += `  ${i + 1}. $${r.price_usd} — ${r.airline} | ${fmtDur(r.duration_minutes)} | 🔎 ${r.source}\n`;
+        }
+      }
+      if (connResults.length > 0) {
+        admin += `\n🔗 *קונקשן (זול מישירה):*\n`;
+        for (let i = 0; i < Math.min(3, connResults.length); i++) {
+          const r = connResults[i];
+          admin += `  ${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops} עצירות | ${fmtDur(r.duration_minutes)}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
+          // Show segments
+          if (r.flights_detail && r.flights_detail.length > 0) {
+            for (let si = 0; si < r.flights_detail.length; si++) {
+              const seg = r.flights_detail[si];
+              admin += `     ${seg.airline} ${seg.flight_number || ''} | ${seg.departure?.id || ''} ${seg.departure?.time?.slice(11,16) || ''} → ${seg.arrival?.id || ''} ${seg.arrival?.time?.slice(11,16) || ''}`;
+              if (seg.duration) admin += ` (${fmtDur(seg.duration)})`;
+              admin += `\n`;
+              if (si < r.flights_detail.length - 1) {
+                const nextSeg = r.flights_detail[si+1];
+                const arrTime = new Date(seg.arrival?.time || 0).getTime();
+                const depTime = new Date(nextSeg.departure?.time || 0).getTime();
+                if (arrTime && depTime && depTime > arrTime) {
+                  const layoverMin = Math.round((depTime - arrTime) / 60000);
+                  admin += `     ⏳ המתנה: ${fmtDur(layoverMin)} שעות\n`;
+                }
               }
             }
           }
         }
-        if (cheapestConnection.is_virtual_interline) {
-          connectionTip += `  🔗 שילוב חברות — self-transfer\n`;
-        }
-
-        // Customer version — summary only
-        connectionTipCustomer = `\n💡 *יש גם קונקשן חכם ב-$${cheapestConnection.price_usd}*\n`;
-        connectionTipCustomer += `חיסכון של $${connSaving} (${connPct}%) לעומת ישירה\n`;
-        connectionTipCustomer += `${cheapestConnection.stops} עצירות | ${fmtDur(cheapestConnection.duration_minutes)} שעות\n`;
       }
+      if (deduped.length === 0) {
+        admin += `  ❌ לא נמצאו טיסות לכיוון זה\n`;
+      }
+
+      // Customer summary for this direction
+      customer += `\n✈️ *${dirLabel}: ${heCity(fromIata)} → ${heCity(toIata)}* (${date})\n`;
+      if (cheapest) {
+        customer += `💰 מ-*$${cheapest.price_usd}*`;
+        if (directResults.length > 0) {
+          customer += ` | ${directResults.length} טיסות ישירות`;
+        }
+        if (connResults.length > 0) {
+          customer += ` | ${connResults.length} קונקשנים זולים`;
+        }
+        customer += `\n`;
+        // Booking link for cheapest flight
+        if (cheapest.booking_token) {
+          customer += `🔗 הזמנה: https://www.google.com/travel/flights/booking?token=${cheapest.booking_token}\n`;
+        } else if (cheapest.booking_url) {
+          customer += `🔗 הזמנה: ${cheapest.booking_url}\n`;
+        }
+      } else {
+        customer += `❌ לא נמצאו טיסות\n`;
+      }
+
+      return { admin, customer, cheapest: cheapest?.price_usd || null };
     }
 
     const isBeat = request.type === "beat";
     let status = "found";
+
+    // Overall cheapest across all directions
+    const cheapest = allDeduped.length > 0 ? Math.min(...allDeduped.map(r => r.price_usd)) : null;
 
     // --- Build TWO summaries: one for admin (full), one for customer (teaser) ---
 
     let adminSummary = "";   // Full details — for admin + after payment
     let customerTeaser = ""; // No prices/details — for customer before payment
 
-    if (deduped.length === 0) {
+    if (allDeduped.length === 0) {
       status = "not_found";
       adminSummary = `לא נמצאו תוצאות עבור החיפוש הזה.\n`;
       adminSummary += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
@@ -531,32 +627,39 @@ serve(async (req) => {
       customerTeaser += `_צייד טיסות ✈️_`;
     } else if (isBeat) {
       const customerPrice = request.customer_price_usd || 0;
-      if (cheapest && cheapest < customerPrice) {
-        const saving = customerPrice - cheapest;
+      // For beat mode, use outbound direction cheapest
+      const outboundCheapest = directionResults[0]?.deduped[0]?.price_usd;
+      if (outboundCheapest && outboundCheapest < customerPrice) {
+        const saving = customerPrice - outboundCheapest;
         const savingPct = Math.round((saving / customerPrice) * 100);
 
-        // Admin gets full details + engine info
+        // Admin gets per-direction results
         adminSummary = `🎉 מצאנו טיסה זולה יותר!\n\n`;
         adminSummary += `המחיר של הלקוח: $${customerPrice}\n`;
-        adminSummary += `המחיר שמצאנו: $${cheapest}\n`;
-        adminSummary += `חיסכון: $${saving} (${savingPct}%)\n\n`;
-        for (let i = 0; i < Math.min(5, deduped.length); i++) {
-          const r = deduped[i];
-          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
+        adminSummary += `המחיר שמצאנו (הלוך): $${outboundCheapest}\n`;
+        adminSummary += `חיסכון: $${saving} (${savingPct}%)\n`;
+        for (const dr of directionResults) {
+          const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
+          adminSummary += dirSum.admin;
         }
-        adminSummary += connectionTip;
         adminSummary += `\n${engineStats}`;
 
-        // Customer gets teaser — price yes, details no, NO source
+        // Customer teaser
         customerTeaser = `🎉 חדשות מעולות!\n\n`;
-        customerTeaser += `מצאנו טיסה ב-*$${cheapest}* במקום $${customerPrice} שמצאת!\n`;
+        customerTeaser += `מצאנו טיסה ב-*$${outboundCheapest}* במקום $${customerPrice} שמצאת!\n`;
         customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n`;
-        customerTeaser += connectionTipCustomer;
+        if (isRoundTrip) {
+          customerTeaser += `\n🔄 *הלוך ושוב — הצעות לכל כיוון בנפרד:*\n`;
+          for (const dr of directionResults) {
+            const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
+            customerTeaser += dirSum.customer;
+          }
+        }
         customerTeaser += `\nלקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.\n\n`;
         customerTeaser += `📋 מספר בקשה: ${requestId}`;
       } else {
         adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
-        adminSummary += `המחיר הזול ביותר שמצאנו: $${cheapest}\n`;
+        adminSummary += `המחיר הזול ביותר שמצאנו: $${outboundCheapest || cheapest}\n`;
         adminSummary += `ייתכן שהמחיר שמצא הלקוח הוא כבר הדיל הכי טוב.\n\n`;
         adminSummary += engineStats;
         customerTeaser = `שלום ${request.name} 👋\n\n`;
@@ -565,7 +668,7 @@ serve(async (req) => {
         customerTeaser += `🔄 ${tripLabel(request)}\n`;
         customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
         customerTeaser += `לצערנו, המחיר שמצאת הוא כבר מצוין — לא הצלחנו להכות אותו! 👏\n`;
-        customerTeaser += `המחיר הזול ביותר שמצאנו: *$${cheapest}*\n\n`;
+        customerTeaser += `המחיר הזול ביותר שמצאנו: *$${outboundCheapest || cheapest}*\n\n`;
         customerTeaser += `💡 *טיפים שיכולים לעזור:*\n`;
         customerTeaser += `• נסה תאריכים גמישים (±3 ימים) — הפרשים יכולים להגיע ל-30%\n`;
         customerTeaser += `• בדוק שדה תעופה חלופי (למשל סטנסטד במקום הית'רו)\n`;
@@ -578,48 +681,55 @@ serve(async (req) => {
         status = "not_found";
       }
     } else {
-      // Research
+      // Research — per-direction results
       adminSummary = `📊 דוח מחקר טיסות\n`;
       adminSummary += `${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
       adminSummary += `🔄 ${tripLabel(request)}\n`;
-      adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      const directResults = deduped.filter(r => r.stops === 0);
-      const connResults = deduped.filter(r => r.stops > 0);
-
-      if (directResults.length > 0) {
-        adminSummary += `✈️ *טיסות ישירות:*\n\n`;
-        for (let i = 0; i < Math.min(5, directResults.length); i++) {
-          const r = directResults[i];
-          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${fmtDur(r.duration_minutes)} | 🔎 ${r.source}\n`;
-        }
+      adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n`;
+      adminSummary += `👥 ${request.adults} מבוגרים${request.children ? " + " + request.children + " ילדים" : ""}\n`;
+      for (const dr of directionResults) {
+        const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
+        adminSummary += dirSum.admin;
       }
-      if (connResults.length > 0) {
-        adminSummary += `\n🔗 *טיסות עם קונקשן:*\n\n`;
-        for (let i = 0; i < Math.min(3, connResults.length); i++) {
-          const r = connResults[i];
-          adminSummary += `${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops} עצירות | ${fmtDur(r.duration_minutes)}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
-        }
-      }
-      adminSummary += connectionTip;
       adminSummary += `\n${engineStats}`;
 
-      // Customer gets teaser — cheapest price yes, full details no, NO source
+      // Customer teaser
       customerTeaser = `📊 הדוח שלך מוכן!\n\n`;
       customerTeaser += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
       customerTeaser += `🔄 ${tripLabel(request)}\n`;
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
-      customerTeaser += `🔍 מצאנו *${deduped.length} טיסות*\n`;
-      customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n`;
-      customerTeaser += connectionTipCustomer;
-      customerTeaser += `\n`;
-      customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.\n\n`;
+      if (isRoundTrip) {
+        customerTeaser += `🔄 *הצעות לכל כיוון בנפרד:*\n`;
+        for (const dr of directionResults) {
+          const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
+          customerTeaser += dirSum.customer;
+        }
+      } else {
+        customerTeaser += `🔍 מצאנו *${allDeduped.length} טיסות*\n`;
+        customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n`;
+        // Booking link for cheapest
+        const cheapestResult = allDeduped[0];
+        if (cheapestResult?.booking_token) {
+          customerTeaser += `🔗 הזמנה: https://www.google.com/travel/flights/booking?token=${cheapestResult.booking_token}\n`;
+        } else if (cheapestResult?.booking_url) {
+          customerTeaser += `🔗 הזמנה: ${cheapestResult.booking_url}\n`;
+        }
+      }
+      customerTeaser += `\nלקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.\n\n`;
       customerTeaser += `📋 מספר בקשה: ${requestId}`;
     }
 
     const aiResponse = {
       admin_summary: adminSummary,
       customer_teaser: customerTeaser,
-      results: deduped.slice(0, 5),
+      results: allDeduped.slice(0, 10),
+      direction_results: directionResults.map(dr => ({
+        label: dr.dir.label,
+        from: dr.dir.from,
+        to: dr.dir.to,
+        date: dr.dir.date,
+        results: dr.deduped.slice(0, 5),
+      })),
       cheapest_price: cheapest,
       search_time: new Date().toISOString(),
       sources_searched: [
@@ -712,7 +822,7 @@ serve(async (req) => {
       }
     }
 
-    return new Response(JSON.stringify({ success: true, status, results_count: results.length }), {
+    return new Response(JSON.stringify({ success: true, status, results_count: allDeduped.length }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
