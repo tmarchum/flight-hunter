@@ -156,10 +156,9 @@ serve(async (req) => {
       }
     }
 
-    // 2. Skyscanner via RapidAPI (using skyfare_key as RapidAPI key)
+    // 2. Skyscanner via Flights Scraper Sky (RapidAPI)
     if (settings.skyfare_key) {
       try {
-        // Try multiple Skyscanner endpoints on RapidAPI
         const rapidApiKey = settings.skyfare_key;
         const searchType = request.is_one_way ? "search-one-way" : "search-roundtrip";
         const skyParams: any = {
@@ -174,13 +173,12 @@ serve(async (req) => {
         }
         const qs = new URLSearchParams(skyParams).toString();
 
-        // Try sky-scanner3 API
         const skyResp = await fetch(
-          `https://sky-scanner3.p.rapidapi.com/flights/${searchType}?${qs}`,
+          `https://flights-sky.p.rapidapi.com/flights/${searchType}?${qs}`,
           {
             headers: {
               "X-RapidAPI-Key": rapidApiKey,
-              "X-RapidAPI-Host": "sky-scanner3.p.rapidapi.com",
+              "X-RapidAPI-Host": "flights-sky.p.rapidapi.com",
             },
           }
         );
@@ -194,7 +192,7 @@ serve(async (req) => {
             const firstLeg = legs[0];
             results.push({
               source: "Skyscanner",
-              price_usd: itin.price?.raw || itin.price?.amount,
+              price_usd: Math.round(itin.price?.raw || 0),
               airline: firstLeg?.carriers?.marketing?.[0]?.name || "Unknown",
               stops: firstLeg?.stopCount || 0,
               duration_minutes: firstLeg?.durationInMinutes || 0,
@@ -202,10 +200,10 @@ serve(async (req) => {
               arrival_time: firstLeg?.arrival || "",
               departure_airport: firstLeg?.origin?.name || "",
               arrival_airport: firstLeg?.destination?.name || "",
-              booking_url: itin.url || null,
+              booking_url: null,
               flights_detail: (firstLeg?.segments || []).map((s: any) => ({
-                airline: s.marketingCarrier?.name,
-                flight_number: s.flightNumber,
+                airline: s.operatingCarrier?.name || firstLeg?.carriers?.marketing?.[0]?.name,
+                flight_number: s.flightNumber || "",
                 departure: { id: s.origin?.flightPlaceId, name: s.origin?.name, time: s.departure },
                 arrival: { id: s.destination?.flightPlaceId, name: s.destination?.name, time: s.arrival },
                 duration: s.durationInMinutes,
