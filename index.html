@@ -186,7 +186,7 @@ const fmtDate = d => d ? new Date(d).toLocaleDateString('he-IL') : '—';
 const fmtDateTime = d => d ? new Date(d).toLocaleString('he-IL') : '—';
 
 // ============ LANDING PAGE ============
-const Landing = ({go}) => (
+const Landing = ({go, price='249'}) => (
   <div style={{minHeight:'100vh'}}>
     <nav style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'16px 24px',borderBottom:'1px solid #1e1e2e'}}>
       <div style={{display:'flex',alignItems:'center',gap:8,fontSize:20,fontWeight:900}}>✈️ <span style={{color:'#f5a623'}}>צייד</span> טיסות</div>
@@ -205,7 +205,7 @@ const Landing = ({go}) => (
         <div style={{position:'absolute',top:16,left:16,background:'#22c55e20',color:'#22c55e',padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:700}}>ללא סיכון</div>
         <div style={{fontSize:36,marginBottom:12,marginTop:8}}>🎯</div>
         <h2 style={{fontSize:28,fontWeight:900,margin:'0 0 8px'}}>הכה את המחיר</h2>
-        <div style={{fontSize:32,fontWeight:900,color:'#f5a623'}}>₪249 <span style={{fontSize:14,color:'#6b7280',fontWeight:400}}>רק אם הצלחנו</span></div>
+        <div style={{fontSize:32,fontWeight:900,color:'#f5a623'}}>₪{price} <span style={{fontSize:14,color:'#6b7280',fontWeight:400}}>רק אם הצלחנו</span></div>
         <p style={{color:'#9ca3af',margin:'12px 0 20px',fontSize:15}}>מצאת טיסה? שלח לנו. נחפש זול יותר. משלם רק אם ניצחנו.</p>
         {['ללא תשלום מראש','AI משווה 3 מקורות','תוצאות תוך שעה','WhatsApp ישיר'].map(t=><div key={t} style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:8}}><span style={{color:'#22c55e'}}>✓</span>{t}</div>)}
         <button className="btn btn-p" style={{marginTop:16}}>בחר — הכה את המחיר</button>
@@ -214,7 +214,7 @@ const Landing = ({go}) => (
         <div style={{position:'absolute',top:16,left:16,background:'#f5a62320',color:'#f5a623',padding:'4px 12px',borderRadius:20,fontSize:12,fontWeight:700}}>הכי פופולרי</div>
         <div style={{fontSize:36,marginBottom:12,marginTop:8}}>📊</div>
         <h2 style={{fontSize:28,fontWeight:900,margin:'0 0 8px'}}>דוח מחקר טיסות</h2>
-        <div style={{fontSize:32,fontWeight:900,color:'#f5a623'}}>₪249 <span style={{fontSize:14,color:'#6b7280',fontWeight:400}}>רק אם הצלחנו</span></div>
+        <div style={{fontSize:32,fontWeight:900,color:'#f5a623'}}>₪{price} <span style={{fontSize:14,color:'#6b7280',fontWeight:400}}>רק אם הצלחנו</span></div>
         <p style={{color:'#9ca3af',margin:'12px 0 20px',fontSize:15}}>אין לך מחיר? AI סורק הכל ומכין דוח עם 5 הדילים הכי טובים.</p>
         {['5 דילים מדורגים','המלצת AI אישית','השוואה מ-3 מקורות','WhatsApp תוך שעה'].map(t=><div key={t} style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:8}}><span style={{color:'#22c55e'}}>✓</span>{t}</div>)}
         <button className="btn btn-p" style={{marginTop:16}}>בחר — דוח מחקר</button>
@@ -225,7 +225,7 @@ const Landing = ({go}) => (
 );
 
 // ============ FLIGHT FORM (shared by beat & research) ============
-const FlightForm = ({type, go}) => {
+const FlightForm = ({type, go, price='249'}) => {
   const isBeat = type === 'beat';
   const [step, setStep] = useState(1);
   const [loading, setLoading] = useState(false);
@@ -265,12 +265,21 @@ const FlightForm = ({type, go}) => {
       // Send immediate WhatsApp confirmation to customer
       if (settings.green_instance && settings.green_token) {
         const wa = f.whatsapp.replace(/^0/,'').replace(/[^0-9]/g,'');
-        const msg = `שלום ${f.name} 👋\n\n✅ הבקשה שלך התקבלה!\n\n✈️ ${f.from_iata} → ${f.to_iata}\n📅 ${f.depart_date}${f.return_date?' — '+f.return_date:''}\n👥 ${f.adults} נוסעים\n${isBeat?'💰 המחיר שמצאת: $'+f.customer_price_usd:'📊 סוג: דוח מחקר'}\n\nהמערכת מחפשת עבורך כרגע בכל המקורות.\nנעדכן אותך ב-WhatsApp ברגע שנסיים! 🔍\n\n_צייד טיסות_`;
+        const sPrice = settings.service_price||'249';
+        const msg = `שלום ${f.name} 👋\n\n✅ הבקשה שלך התקבלה!\n\n✈️ ${f.from_iata} → ${f.to_iata}\n📅 ${f.depart_date}${f.return_date?' — '+f.return_date:''}\n👥 ${f.adults} נוסעים\n${isBeat?'💰 המחיר שמצאת: $'+f.customer_price_usd:'📊 סוג: דוח מחקר'}\n\nהמערכת מחפשת עבורך כרגע בכל המקורות.\nנעדכן אותך ב-WhatsApp ברגע שנסיים! 🔍\n💰 עלות השירות: ₪${sPrice} — רק אם הצלחנו\n\n_צייד טיסות_`;
         try { await fetch(`https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chatId:`972${wa}@c.us`,message:msg})}); } catch(e){}
       }
-      // Trigger Make.com search webhook
+      // Trigger Make.com search webhook (include API keys so Make.com doesn't need to fetch them)
       if (settings.webhook_search) {
-        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({...row, id:data?.id})}); } catch(e){}
+        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+          ...row,
+          id: data?.id,
+          serpapi_key: settings.serpapi_key||'',
+          skyfare_key: settings.skyfare_key||'',
+          claude_key: settings.claude_key||'',
+          green_instance: settings.green_instance||'',
+          green_token: settings.green_token||''
+        })}); } catch(e){}
       }
     }
     setLoading(false);
@@ -287,7 +296,7 @@ const FlightForm = ({type, go}) => {
         <div style={{textAlign:'center',marginBottom:24}}>
           <div style={{fontSize:36,marginBottom:8}}>{isBeat?'🎯':'📊'}</div>
           <h1 style={{fontSize:28,fontWeight:900,margin:0}}>{isBeat?'הכה את המחיר':'דוח מחקר טיסות'}</h1>
-          <p style={{color:'#6b7280',fontSize:14,margin:'8px 0 0'}}>₪249 — רק אם הצלחנו למצוא {isBeat?'זול יותר':'דילים'}</p>
+          <p style={{color:'#6b7280',fontSize:14,margin:'8px 0 0'}}>₪{price} — רק אם הצלחנו למצוא {isBeat?'זול יותר':'דילים'}</p>
         </div>
         {step <= totalSteps && <div style={{marginBottom:24}}>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:12,color:'#6b7280',marginBottom:6}}><span>שלב {step} מתוך {totalSteps}</span><span>{pct}%</span></div>
@@ -370,7 +379,7 @@ const FlightForm = ({type, go}) => {
               {!isBeat && <div style={{color:'#f5a623'}}>💰 תקציב: עד ${f.budget_usd}</div>}
             </div>
             <div style={{background:'#22c55e10',border:'1px solid #22c55e30',borderRadius:12,padding:10,fontSize:12,textAlign:'center',color:'#22c55e',marginBottom:12}}>
-              🛡️ ₪249 רק אם הצלחנו — לא מצאנו? לא משלמים
+              🛡️ ₪{price} רק אם הצלחנו — לא מצאנו? לא משלמים
             </div>
             <button className="btn btn-p" disabled={!f.name||!f.whatsapp||loading} onClick={submit}>
               {loading?'⏳ שולח...':'שלח בקשה — ₪0 עכשיו'}
@@ -388,7 +397,7 @@ const FlightForm = ({type, go}) => {
               <div>📱 {f.whatsapp}</div>
               <div style={{color:'#f5a623'}}>💰 {isBeat?`יעד: פחות מ-$${f.customer_price_usd}`:`תקציב: עד $${f.budget_usd}`}</div>
             </div>
-            <p style={{fontSize:12,color:'#6b7280',marginBottom:16}}>אם {isBeat?'מצאנו זול יותר':'מצאנו דילים'} — תקבל וואטסאפ עם {isBeat?'המחיר':'הדוח'}. תשלום ₪249 רק אחרי שתאשר.</p>
+            <p style={{fontSize:12,color:'#6b7280',marginBottom:16}}>אם {isBeat?'מצאנו זול יותר':'מצאנו דילים'} — תקבל וואטסאפ עם {isBeat?'המחיר':'הדוח'}. תשלום ₪{price} רק אחרי שתאשר.</p>
             <button className="btn btn-p" onClick={()=>go('home')}>חזור לדף הבית</button>
           </div>}
         </div>
@@ -466,7 +475,7 @@ const Admin = ({go}) => {
     pending: requests.filter(r=>r.status==='pending').length,
     active: requests.filter(r=>['searching','found','sent_price','awaiting_payment'].includes(r.status)).length,
     paid: requests.filter(r=>['paid','sent'].includes(r.status)).length,
-    revenue: requests.filter(r=>['paid','sent'].includes(r.status)).reduce((a,r)=>a+(r.amount_paid||249),0),
+    revenue: requests.filter(r=>['paid','sent'].includes(r.status)).reduce((a,r)=>a+(r.amount_paid||parseInt(settings.service_price||'249')),0),
     today: requests.filter(r=>r.created_at?.startsWith(new Date().toISOString().slice(0,10))).length,
   };
 
@@ -496,13 +505,71 @@ const Admin = ({go}) => {
         </div>
       </div>
       <div style={{maxWidth:600,margin:'32px auto',padding:'0 16px'}}>
-        <h2 style={{fontSize:24,fontWeight:900,marginBottom:24}}>⚙️ הגדרות API</h2>
+        <h2 style={{fontSize:24,fontWeight:900,marginBottom:24}}>⚙️ הגדרות</h2>
+
+        {/* Service Price */}
+        <div className="card" style={{padding:16,marginBottom:12,border:'1px solid #f5a62340'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{fontWeight:700,fontSize:14}}>💰 מחיר שירות (₪)</span>
+            <span style={{color:'#f5a623',fontSize:13,fontWeight:700}}>₪{settings.service_price||'249'}</span>
+          </div>
+          <input
+            type="number"
+            value={settings.service_price||'249'}
+            onChange={e=>setSettings(s=>({...s,service_price:e.target.value}))}
+            onBlur={e=>saveSetting('service_price',e.target.value)}
+            placeholder="249"
+            style={{fontSize:13}}
+          />
+          <p style={{fontSize:11,color:'#6b7280',marginTop:4}}>הסכום שמוצג באתר ונשלח לתשלום ב-SUMIT</p>
+        </div>
+
+        {/* Test Mode Toggle */}
+        <div className="card" style={{padding:16,marginBottom:12,border:settings.test_mode==='true'?'1px solid #f59e0b40':'1px solid #1e1e2e'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <span style={{fontWeight:700,fontSize:14}}>🧪 מצב הרצה (Test Mode)</span>
+              <p style={{fontSize:11,color:'#6b7280',marginTop:4}}>מדלג על תשלום SUMIT — התהליך רץ מקצה לקצה בלי חיוב אמיתי</p>
+            </div>
+            <button
+              onClick={()=>{const v=settings.test_mode==='true'?'false':'true';setSettings(s=>({...s,test_mode:v}));saveSetting('test_mode',v);}}
+              style={{padding:'8px 16px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'Heebo',fontWeight:700,fontSize:13,
+                background:settings.test_mode==='true'?'#f59e0b':'#1e1e2e',
+                color:settings.test_mode==='true'?'#000':'#6b7280',
+                minWidth:60}}
+            >
+              {settings.test_mode==='true'?'פעיל':'כבוי'}
+            </button>
+          </div>
+        </div>
+
+        {/* Admin Approval Toggle */}
+        <div className="card" style={{padding:16,marginBottom:24,border:settings.admin_approval==='true'?'1px solid #3b82f640':'1px solid #1e1e2e'}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+            <div>
+              <span style={{fontWeight:700,fontSize:14}}>👁️ אישור מנהל לפני שליחה</span>
+              <p style={{fontSize:11,color:'#6b7280',marginTop:4}}>לאחר חיפוש — התוצאות נשלחות לאישור מנהל לפני שליחת מחיר ללקוח</p>
+            </div>
+            <button
+              onClick={()=>{const v=settings.admin_approval==='true'?'false':'true';setSettings(s=>({...s,admin_approval:v}));saveSetting('admin_approval',v);}}
+              style={{padding:'8px 16px',borderRadius:10,border:'none',cursor:'pointer',fontFamily:'Heebo',fontWeight:700,fontSize:13,
+                background:settings.admin_approval==='true'?'#3b82f6':'#1e1e2e',
+                color:settings.admin_approval==='true'?'#fff':'#6b7280',
+                minWidth:60}}
+            >
+              {settings.admin_approval==='true'?'פעיל':'כבוי'}
+            </button>
+          </div>
+        </div>
+
+        <h3 style={{fontSize:18,fontWeight:700,margin:'0 0 16px'}}>🔑 מפתחות API</h3>
         {[
           {key:'serpapi_key',label:'SerpApi Key (Google Flights)',desc:'serpapi.com → My Account → API Key'},
           {key:'skyfare_key',label:'SkyFare / RapidAPI Key',desc:'rapidapi.com → SkyFare API → X-RapidAPI-Key'},
           {key:'claude_key',label:'Claude API Key',desc:'console.anthropic.com → API Keys'},
           {key:'green_instance',label:'Green API Instance ID',desc:'green-api.com → Instance ID'},
           {key:'green_token',label:'Green API Token',desc:'green-api.com → API Token'},
+          {key:'admin_whatsapp',label:'WhatsApp מנהל',desc:'מספר WhatsApp של המנהל לקבלת התראות (למשל 0501234567)'},
           {key:'sumit_company_id',label:'SUMIT Company ID',desc:'sumit.co.il → הגדרות חברה'},
           {key:'sumit_api_key',label:'SUMIT API Key',desc:'sumit.co.il → API Key'},
           {key:'admin_password',label:'סיסמת מנהל',desc:'הסיסמה לכניסה לדשבורד'},
@@ -523,7 +590,7 @@ const Admin = ({go}) => {
             <p style={{fontSize:11,color:'#6b7280',marginTop:4}}>{item.desc}</p>
           </div>
         ))}
-        <h3 style={{fontSize:18,fontWeight:700,margin:'32px 0 16px'}}>🔗 Webhooks (Make.com)</h3>
+        <h3 style={{fontSize:18,fontWeight:700,margin:'32px 0 16px'}}>🔗 Webhooks (Edge Functions)</h3>
         {[
           {key:'webhook_search',label:'Webhook חיפוש'},
           {key:'webhook_payment',label:'Webhook תשלום'},
@@ -697,6 +764,29 @@ const Admin = ({go}) => {
                 {typeof sel.ai_response==='string'?sel.ai_response:JSON.stringify(sel.ai_response,null,2)}
               </div>
             </div>}
+
+            {/* Admin Approval Button — shown when status is 'found' and admin_approval is enabled */}
+            {sel.status==='found' && <div style={{marginTop:16}}>
+              <button className="btn btn-p" style={{background:'#22c55e',color:'#fff',marginBottom:8}} onClick={async()=>{
+                // Approve: call search-flights edge function to send WhatsApp to customer
+                const wa = sel.whatsapp.replace(/^0/,'').replace(/[^0-9]/g,'');
+                const chatId = `972${wa}@c.us`;
+                const aiResp = sel.ai_response || {};
+                const sPrice = settings.service_price||'249';
+                let msg = `שלום ${sel.name} 👋\n\n🔍 סיימנו לחפש עבורך!\n\n`;
+                msg += aiResp.summary || '';
+                msg += `\n\n💳 המחיר לשירות: ₪${sPrice}`;
+                msg += `\nרוצה להמשיך? השב *כן* כדי לקבל קישור לתשלום.`;
+                msg += `\n\n_צייד טיסות ✈️_`;
+                if(settings.green_instance && settings.green_token) {
+                  try { await fetch(`https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chatId,message:msg})}); } catch(e){}
+                }
+                await setStatus(sel.id,'sent_price');
+              }}>
+                ✅ אשר ושלח ללקוח
+              </button>
+              <p style={{fontSize:11,color:'#6b7280',textAlign:'center'}}>שולח את התוצאות + קישור תשלום ללקוח ב-WhatsApp</p>
+            </div>}
           </div>}
         </div>
       </div>
@@ -707,10 +797,13 @@ const Admin = ({go}) => {
 // ============ APP ROUTER ============
 const App = () => {
   const [page, setPage] = useState('home');
+  const [globalSettings, setGlobalSettings] = useState({});
+  useEffect(()=>{ DB.getSettings().then(setGlobalSettings); },[]);
+  const price = globalSettings.service_price || '249';
   const pages = {
-    home: <Landing go={setPage}/>,
-    beat: <FlightForm type="beat" go={setPage}/>,
-    research: <FlightForm type="research" go={setPage}/>,
+    home: <Landing go={setPage} price={price}/>,
+    beat: <FlightForm type="beat" go={setPage} price={price}/>,
+    research: <FlightForm type="research" go={setPage} price={price}/>,
     admin: <Admin go={setPage}/>,
   };
   return pages[page] || pages.home;

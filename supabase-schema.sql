@@ -68,12 +68,16 @@ insert into settings (key, value) values
   ('claude_key', ''),
   ('green_instance', ''),
   ('green_token', ''),
+  ('admin_whatsapp', ''),
   ('sumit_company_id', ''),
   ('sumit_api_key', ''),
   ('admin_password', 'hunter2025'),
-  ('webhook_search', 'https://hook.eu2.make.com/0x8dhvubeo9afc4v8qx57dly35ds9fhn'),
-  ('webhook_payment', 'https://hook.eu2.make.com/w8a4rxi989q71n5wqyo1xatyx55vttpv'),
-  ('webhook_reply', 'https://hook.eu2.make.com/ua6khbp6v4uj8gr9ydyt6jn50hpt0092')
+  ('service_price', '249'),
+  ('test_mode', 'false'),
+  ('admin_approval', 'true'),
+  ('webhook_search', 'https://stncskqjrmecjckxldvi.supabase.co/functions/v1/search-flights'),
+  ('webhook_payment', 'https://stncskqjrmecjckxldvi.supabase.co/functions/v1/handle-payment'),
+  ('webhook_reply', 'https://stncskqjrmecjckxldvi.supabase.co/functions/v1/handle-reply')
 on conflict (key) do nothing;
 
 -- RLS - Row Level Security
