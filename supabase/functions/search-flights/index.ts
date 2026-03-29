@@ -146,8 +146,12 @@ serve(async (req) => {
     const url = new URL(req.url);
 
     // --- Handle admin approval link (GET ?action=approve&request_id=xxx) ---
+    // Two-step: first GET without confirm= shows a confirmation page,
+    // second GET with confirm=yes actually approves (prevents WhatsApp link preview from auto-approving)
     if (req.method === "GET" && url.searchParams.get("action") === "approve") {
       const reqId = url.searchParams.get("request_id") || "";
+      const confirmed = url.searchParams.get("confirm") === "yes";
+
       if (!reqId) {
         return new Response("missing request_id", { status: 400, headers: corsHeaders });
       }
@@ -158,13 +162,32 @@ serve(async (req) => {
 
       // Prevent duplicate sends — only approve if status is still "found"
       if (r.status !== "found") {
-        return new Response(JSON.stringify({
-          success: false,
-          message: `הבקשה כבר טופלה (סטטוס: ${r.status})`,
-          request_id: reqId,
-        }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+        return new Response(
+          `<html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:40px">
+            <h2>הבקשה כבר טופלה</h2><p>סטטוס: ${r.status}</p><p>בקשה: ${reqId.slice(0,8)}</p>
+          </body></html>`,
+          { headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } }
+        );
       }
 
+      // Step 1: Show confirmation page (this is what WhatsApp link preview hits)
+      if (!confirmed) {
+        const confirmUrl = `${SB_URL}/functions/v1/search-flights?action=approve&request_id=${reqId}&confirm=yes`;
+        return new Response(
+          `<html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:40px">
+            <h2>✈️ צייד טיסות — אישור בקשה</h2>
+            <p><b>לקוח:</b> ${r.name} (${r.whatsapp})</p>
+            <p><b>מסלול:</b> ${r.from_iata} → ${r.to_iata}</p>
+            <p><b>תאריך:</b> ${r.depart_date}${r.return_date ? " — " + r.return_date : ""}</p>
+            <br>
+            <a href="${confirmUrl}" style="background:#22c55e;color:white;padding:15px 40px;border-radius:8px;text-decoration:none;font-size:18px">✅ אשר ושלח ללקוח</a>
+            <br><br><p style="color:#888">לחץ על הכפתור לאישור</p>
+          </body></html>`,
+          { headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } }
+        );
+      }
+
+      // Step 2: Actually approve (only when confirm=yes)
       const { data: sData } = await sb.rpc("get_settings_json");
       const s = sData || {};
       const aiResp = r.ai_response || {};
@@ -175,11 +198,14 @@ serve(async (req) => {
         await sendTeaserWithPayment(sb, s, r, teaser);
       }
 
-      return new Response(JSON.stringify({
-        success: true,
-        message: `הבקשה אושרה! ההצעה נשלחה ללקוח ${r.name} ב-WhatsApp.`,
-        request_id: reqId,
-      }), { headers: { ...corsHeaders, "Content-Type": "application/json" } });
+      return new Response(
+        `<html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:40px">
+          <h2>✅ הבקשה אושרה!</h2>
+          <p>ההצעה נשלחה ללקוח <b>${r.name}</b> ב-WhatsApp.</p>
+          <p>בקשה: ${reqId.slice(0,8)}</p>
+        </body></html>`,
+        { headers: { ...corsHeaders, "Content-Type": "text/html; charset=utf-8" } }
+      );
     }
 
     // --- Normal POST: search flights ---
@@ -539,28 +565,48 @@ serve(async (req) => {
 
     const fmtDur = (m: number) => `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`;
 
+    // Helper: format a single flight line for WhatsApp
+    function fmtFlight(r: any, idx: number): string {
+      let line = `${idx}. *$${r.price_usd}* — ${r.airline}`;
+      line += ` | ${r.stops === 0 ? "ישירה" : r.stops + " עצירות"}`;
+      if (r.duration_minutes) line += ` | ${fmtDur(r.duration_minutes)} שעות`;
+      line += `\n`;
+      if (r.departure_time) {
+        const depTime = r.departure_time?.slice?.(11, 16) || r.departure_time;
+        const arrTime = r.arrival_time?.slice?.(11, 16) || r.arrival_time;
+        line += `   🕐 ${depTime}${arrTime ? " → " + arrTime : ""}`;
+        line += ` | מקור: ${r.source}\n`;
+      } else {
+        line += `   מקור: ${r.source}\n`;
+      }
+      return line;
+    }
+
     // Helper: build per-direction summary sections
     function buildDirectionSummary(deduped: any[], dirLabel: string, fromIata: string, toIata: string, date: string) {
       let admin = "";
-      let customer = "";
-      const cheapest = deduped.length > 0 ? deduped[0] : null;
+      let full = "";    // Full details — sent after payment
+      let teaser = "";  // Teaser — sent before payment
       const directResults = deduped.filter(r => r.stops === 0);
       const connResults = deduped.filter(r => r.stops > 0);
+      const top3 = directResults.slice(0, 3); // Top 3 cheapest directs
+      const cheapestConn = connResults[0];     // Cheapest connection (already filtered: cheaper than direct)
 
-      admin += `\n✈️ *${dirLabel}: ${heCity(fromIata)} → ${heCity(toIata)}* (${date})\n\n`;
+      const header = `\n✈️ *${dirLabel}: ${heCity(fromIata)} → ${heCity(toIata)}* (${date})\n\n`;
+
+      // --- Admin summary (full details + source) ---
+      admin += header;
       if (directResults.length > 0) {
         admin += `🛫 *טיסות ישירות:*\n`;
         for (let i = 0; i < Math.min(5, directResults.length); i++) {
-          const r = directResults[i];
-          admin += `  ${i + 1}. $${r.price_usd} — ${r.airline} | ${fmtDur(r.duration_minutes)} | 🔎 ${r.source}\n`;
+          admin += fmtFlight(directResults[i], i + 1);
         }
       }
       if (connResults.length > 0) {
         admin += `\n🔗 *קונקשן (זול מישירה):*\n`;
         for (let i = 0; i < Math.min(3, connResults.length); i++) {
           const r = connResults[i];
-          admin += `  ${i + 1}. $${r.price_usd} — ${r.airline} | ${r.stops} עצירות | ${fmtDur(r.duration_minutes)}${r.is_virtual_interline ? " 🔗" : ""} | 🔎 ${r.source}\n`;
-          // Show segments
+          admin += fmtFlight(r, i + 1);
           if (r.flights_detail && r.flights_detail.length > 0) {
             for (let si = 0; si < r.flights_detail.length; si++) {
               const seg = r.flights_detail[si];
@@ -584,28 +630,37 @@ serve(async (req) => {
         admin += `  ❌ לא נמצאו טיסות לכיוון זה\n`;
       }
 
-      // Customer summary for this direction
-      customer += `\n✈️ *${dirLabel}: ${heCity(fromIata)} → ${heCity(toIata)}* (${date})\n`;
-      if (cheapest) {
-        customer += `💰 מ-*$${cheapest.price_usd}*`;
-        if (directResults.length > 0) {
-          customer += ` | ${directResults.length} טיסות ישירות`;
+      // --- Full details (sent to customer AFTER payment) ---
+      full += header;
+      if (top3.length > 0) {
+        for (let i = 0; i < top3.length; i++) {
+          full += fmtFlight(top3[i], i + 1);
         }
-        if (connResults.length > 0) {
-          customer += ` | ${connResults.length} קונקשנים זולים`;
-        }
-        customer += `\n`;
-        // Booking link for cheapest flight
-        if (cheapest.booking_token) {
-          customer += `🔗 הזמנה: https://www.google.com/travel/flights/booking?token=${cheapest.booking_token}\n`;
-        } else if (cheapest.booking_url) {
-          customer += `🔗 הזמנה: ${cheapest.booking_url}\n`;
-        }
-      } else {
-        customer += `❌ לא נמצאו טיסות\n`;
+      }
+      if (cheapestConn) {
+        const savingVsDirect = top3.length > 0 ? top3[0].price_usd - cheapestConn.price_usd : 0;
+        full += `\n💡 *קונקשן זול יותר: $${cheapestConn.price_usd}* — ${cheapestConn.airline}\n`;
+        full += `   ${cheapestConn.stops} עצירות | ${fmtDur(cheapestConn.duration_minutes)} שעות`;
+        if (savingVsDirect > 0) full += ` | חיסכון $${savingVsDirect} לעומת ישירה`;
+        full += `\n   מקור: ${cheapestConn.source}\n`;
+      }
+      if (deduped.length === 0) {
+        full += `❌ לא נמצאו טיסות לכיוון זה\n`;
       }
 
-      return { admin, customer, cheapest: cheapest?.price_usd || null };
+      // --- Teaser (sent before payment — no full details) ---
+      teaser += `\n✈️ *${dirLabel}: ${heCity(fromIata)} → ${heCity(toIata)}* (${date})\n`;
+      if (top3.length > 0) {
+        teaser += `💰 מ-*$${top3[0].price_usd}* | ${directResults.length} טיסות ישירות`;
+        if (cheapestConn) teaser += ` + קונקשן מ-$${cheapestConn.price_usd}`;
+        teaser += `\n`;
+      } else if (cheapestConn) {
+        teaser += `💰 מ-*$${cheapestConn.price_usd}* (קונקשן)\n`;
+      } else {
+        teaser += `❌ לא נמצאו טיסות\n`;
+      }
+
+      return { admin, full, teaser, cheapest: deduped[0]?.price_usd || null };
     }
 
     const isBeat = request.type === "beat";
@@ -666,10 +721,10 @@ serve(async (req) => {
           customerTeaser += `\n🔄 *הלוך ושוב — הצעות לכל כיוון בנפרד:*\n`;
           for (const dr of directionResults) {
             const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
-            customerTeaser += dirSum.customer;
+            customerTeaser += dirSum.teaser;
           }
         }
-        customerTeaser += `\nלקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.\n\n`;
+        customerTeaser += `\nלקבלת כל הפרטים המלאים (חברה, שעות, מקור) — אשר תשלום.\n\n`;
         customerTeaser += `📋 מספר בקשה: ${requestId}`;
       } else {
         adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
@@ -714,28 +769,32 @@ serve(async (req) => {
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
       if (isRoundTrip) {
         customerTeaser += `🔄 *הצעות לכל כיוון בנפרד:*\n`;
-        for (const dr of directionResults) {
-          const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
-          customerTeaser += dirSum.customer;
-        }
-      } else {
-        customerTeaser += `🔍 מצאנו *${allDeduped.length} טיסות*\n`;
-        customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n`;
-        // Booking link for cheapest
-        const cheapestResult = allDeduped[0];
-        if (cheapestResult?.booking_token) {
-          customerTeaser += `🔗 הזמנה: https://www.google.com/travel/flights/booking?token=${cheapestResult.booking_token}\n`;
-        } else if (cheapestResult?.booking_url) {
-          customerTeaser += `🔗 הזמנה: ${cheapestResult.booking_url}\n`;
-        }
       }
-      customerTeaser += `\nלקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.\n\n`;
+      for (const dr of directionResults) {
+        const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
+        customerTeaser += dirSum.teaser;
+      }
+      customerTeaser += `\nלקבלת הדוח המלא עם חברות, שעות ומקורות — אשר תשלום.\n\n`;
       customerTeaser += `📋 מספר בקשה: ${requestId}`;
+    }
+
+    // Build full customer message (sent after payment)
+    let customerFull = "";
+    if (allDeduped.length > 0) {
+      for (const dr of directionResults) {
+        const dirSum = buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date);
+        customerFull += dirSum.full;
+      }
+      customerFull += `\n🔗 *חפש והזמן ב:*\n`;
+      customerFull += `• Google Flights: google.com/travel/flights\n`;
+      customerFull += `• Skyscanner: skyscanner.com\n`;
+      customerFull += `• Kiwi.com: kiwi.com\n`;
     }
 
     const aiResponse = {
       admin_summary: adminSummary,
       customer_teaser: customerTeaser,
+      customer_full: customerFull,
       results: allDeduped.slice(0, 10),
       direction_results: directionResults.map(dr => ({
         label: dr.dir.label,
@@ -766,6 +825,7 @@ serve(async (req) => {
     const servicePrice = settings.service_price || "249";
     const adminApproval = settings.admin_approval === "true";
     const approveUrl = `${SB_URL}/functions/v1/search-flights?action=approve&request_id=${requestId}`;
+
 
     // Send "not found" message directly to customer (no payment needed)
     if (status === "not_found" && settings.green_instance && settings.green_token) {

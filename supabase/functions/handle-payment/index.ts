@@ -105,10 +105,7 @@ serve(async (req) => {
       const chatId = `972${wa}@c.us`;
 
       const aiResp = request.ai_response || {};
-      const dirResults = aiResp.direction_results || [];
-      const results = aiResp.results || [];
-      const isBeat = request.type === "beat";
-      const fmtDur = (m: number) => `${Math.floor(m/60)}:${String(m%60).padStart(2,'0')}`;
+      const customerFull = aiResp.customer_full || "";
 
       let msg = `שלום ${request.name} 🎉\n\n`;
       msg += `✅ התשלום התקבל! תודה רבה!\n\n`;
@@ -118,76 +115,17 @@ serve(async (req) => {
       msg += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n`;
       msg += `👥 ${request.adults} מבוגרים${request.children ? " + " + request.children + " ילדים" : ""}\n`;
 
-      // Per-direction results (new format)
-      if (dirResults.length > 0) {
-        for (const dir of dirResults) {
-          msg += `\n✈️ *${dir.label}: ${heCity(dir.from)} → ${heCity(dir.to)}* (${dir.date})\n\n`;
-          const dirFlights = dir.results || [];
-          if (dirFlights.length === 0) {
-            msg += `  ❌ לא נמצאו טיסות לכיוון זה\n`;
-            continue;
-          }
-          // Show best flight for this direction
-          const best = dirFlights[0];
-          msg += `🏆 *הכי זולה: $${best.price_usd}* — ${best.airline}\n`;
-          msg += `${best.stops === 0 ? "✅ ישירה" : `🔄 ${best.stops} עצירות`}${best.is_virtual_interline ? " 🔗" : ""}`;
-          if (best.duration_minutes) msg += ` | ${fmtDur(best.duration_minutes)} שעות`;
-          msg += `\n`;
-          if (best.departure_time) msg += `🕐 יציאה: ${best.departure_time}\n`;
-          if (best.arrival_time) msg += `🕐 נחיתה: ${best.arrival_time}\n`;
-          if (best.flights_detail && best.flights_detail.length > 0) {
-            msg += `📋 *פרטי טיסה:*\n`;
-            for (const seg of best.flights_detail) {
-              msg += `  ✈️ ${seg.airline} ${seg.flight_number || ""}\n`;
-              msg += `     ${seg.departure?.id || ""} ${seg.departure?.time || ""} → ${seg.arrival?.id || ""} ${seg.arrival?.time || ""}\n`;
-            }
-          }
-          if (best.booking_token) {
-            msg += `🔗 *הזמנה:* https://www.google.com/travel/flights/booking?token=${best.booking_token}\n`;
-          } else if (best.booking_url) {
-            msg += `🔗 *הזמנה:* ${best.booking_url}\n`;
-          }
-          // Additional options for this direction
-          if (dirFlights.length > 1) {
-            msg += `\n📊 *אופציות נוספות:*\n`;
-            for (let i = 1; i < Math.min(5, dirFlights.length); i++) {
-              const r = dirFlights[i];
-              msg += `  ${i + 1}. *$${r.price_usd}* — ${r.airline}`;
-              msg += ` | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}${r.is_virtual_interline ? " 🔗" : ""}`;
-              if (r.duration_minutes) msg += ` | ${fmtDur(r.duration_minutes)}`;
-              msg += `\n`;
-              if (r.booking_token) msg += `     🔗 https://www.google.com/travel/flights/booking?token=${r.booking_token}\n`;
-              else if (r.booking_url) msg += `     🔗 ${r.booking_url}\n`;
-            }
-          }
-        }
-      } else if (results.length > 0) {
-        // Fallback: old single-direction format
-        const best = results[0];
-        if (isBeat) {
-          const saving = (request.customer_price_usd || 0) - (best.price_usd || 0);
-          msg += `\n🏆 *הטיסה הזולה ביותר:*\n`;
-          msg += `💰 *$${best.price_usd}*${saving > 0 ? ` (חסכת $${saving}!)` : ""}\n`;
-        } else {
-          msg += `\n🏆 *הכי זולה: $${best.price_usd}*\n`;
-        }
-        msg += `🛫 *${best.airline}*\n`;
-        msg += `${best.stops === 0 ? "✅ ישירה" : `🔄 ${best.stops} עצירות`}${best.is_virtual_interline ? " 🔗" : ""}\n`;
-        if (best.duration_minutes) msg += `⏱️ ${fmtDur(best.duration_minutes)} שעות\n`;
-        if (best.booking_token) msg += `🔗 *הזמנה:* https://www.google.com/travel/flights/booking?token=${best.booking_token}\n`;
-        else if (best.booking_url) msg += `🔗 *הזמנה:* ${best.booking_url}\n`;
-        if (results.length > 1) {
-          msg += `\n📊 *אופציות נוספות:*\n`;
-          for (let i = 1; i < Math.min(5, results.length); i++) {
-            const r = results[i];
-            msg += `  ${i + 1}. *$${r.price_usd}* — ${r.airline} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}`;
-            if (r.duration_minutes) msg += ` | ${fmtDur(r.duration_minutes)}`;
-            msg += `\n`;
-            if (r.booking_token) msg += `     🔗 https://www.google.com/travel/flights/booking?token=${r.booking_token}\n`;
-            else if (r.booking_url) msg += `     🔗 ${r.booking_url}\n`;
-          }
-        }
+      // Use pre-built full details from search-flights
+      if (customerFull) {
+        msg += customerFull;
+      } else {
+        msg += `\n⚠️ לא נמצאו פרטי טיסות. צור קשר לקבלת עזרה.\n`;
       }
+
+      msg += `\n⚠️ *שים לב:*\n`;
+      msg += `• המחירים נכונים לרגע החיפוש ועשויים להשתנות\n`;
+      msg += `• אנחנו מאתרים טיסות — ההזמנה מתבצעת ישירות מול חברת התעופה או אתר ההזמנות\n`;
+      msg += `• כבודה, בחירת מושב ותוספות נוספות עשויים להיות בתשלום נפרד\n`;
 
       msg += `\n💡 *טיפ:* הזמן מוקדם — המחירים עשויים להשתנות!\n\n`;
       msg += `שאלות? פשוט שלח הודעה 😊\n\n`;
