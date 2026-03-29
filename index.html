@@ -900,8 +900,34 @@ const Admin = ({go}) => {
 };
 
 // ============ APP ROUTER ============
+const PaymentSuccess = ({go}) => {
+  const params = new URLSearchParams(window.location.search);
+  const reqId = params.get('request_id') || '';
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="card p-10 text-center max-w-md fade-in">
+        <div className="text-7xl mb-4">🎉</div>
+        <h1 className="text-3xl font-black mb-3">התשלום התקבל!</h1>
+        <p className="text-muted text-lg mb-2">פרטי הטיסות בדרך אליך ב-WhatsApp</p>
+        {reqId && <p className="text-muted text-sm mb-6">מספר בקשה: {reqId.slice(0,8)}</p>}
+        <div className="bg-bg border border-brd rounded-xl p-4 mb-6 text-right">
+          <p className="text-sm text-muted mb-1">✅ התשלום אושר</p>
+          <p className="text-sm text-muted mb-1">📩 פרטי הטיסות נשלחים ב-WhatsApp</p>
+          <p className="text-sm text-muted">📋 הבקשה עודכנה באזור הניהול</p>
+        </div>
+        <button className="btn btn-p" onClick={()=>{window.history.replaceState({},'',window.location.pathname);go('home');}}>
+          חזור לדף הבית ✈️
+        </button>
+        <p className="text-muted text-xs mt-4">צייד טיסות — תודה שבחרת בנו!</p>
+      </div>
+    </div>
+  );
+};
+
 const App = () => {
-  const [page, setPage] = useState('home');
+  const params = new URLSearchParams(window.location.search);
+  const initialPage = params.get('page') === 'payment-success' ? 'payment-success' : 'home';
+  const [page, setPage] = useState(initialPage);
   const [globalSettings, setGlobalSettings] = useState({});
   useEffect(()=>{ DB.getSettings().then(setGlobalSettings); },[]);
   const price = globalSettings.service_price || '249';
@@ -910,6 +936,7 @@ const App = () => {
     beat: <FlightForm type="beat" go={setPage} price={price}/>,
     research: <FlightForm type="research" go={setPage} price={price}/>,
     admin: <Admin go={setPage}/>,
+    'payment-success': <PaymentSuccess go={setPage}/>,
   };
   return pages[page] || pages.home;
 };

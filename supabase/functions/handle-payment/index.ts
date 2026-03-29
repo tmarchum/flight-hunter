@@ -178,40 +178,40 @@ serve(async (req) => {
           .from("requests")
           .update({ status: "sent", sent_at: new Date().toISOString() })
           .eq("id", requestId);
+
+        // Notify admin about the payment
+        if (settings.admin_whatsapp) {
+          const adminWa = settings.admin_whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+          const adminChatId = `972${adminWa}@c.us`;
+          let adminMsg = `💳 *תשלום התקבל!*\n\n`;
+          adminMsg += `👤 ${request.name} (${request.whatsapp})\n`;
+          adminMsg += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+          adminMsg += `💰 ₪${amountPaid}\n`;
+          adminMsg += `📋 בקשה: ${requestId.slice(0, 8)}\n\n`;
+          adminMsg += `✅ פרטי הטיסות נשלחו ללקוח.\n`;
+          adminMsg += `_צייד טיסות ✈️_`;
+          try {
+            await fetch(
+              `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+              { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId: adminChatId, message: adminMsg }) }
+            );
+          } catch (e2) {
+            console.error("Admin payment notification error:", e2);
+          }
+        }
       } catch (e) {
         console.error("WhatsApp send error:", e);
       }
     }
 
-    // If this was a GET redirect from SUMIT, redirect to a thank-you page
+    // If this was a GET redirect from SUMIT, redirect to our SPA with payment-success page
     if (req.method === "GET") {
-      return new Response(
-        `<!DOCTYPE html>
-<html lang="he" dir="rtl">
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>תשלום התקבל — צייד טיסות</title>
-<style>
-body{background:#0a0a0f;color:#f0f0f5;font-family:'Heebo',sans-serif;display:flex;justify-content:center;align-items:center;min-height:100vh;margin:0}
-.box{text-align:center;max-width:400px;padding:40px}
-</style>
-<link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;700;900&display=swap" rel="stylesheet">
-</head>
-<body>
-<div class="box">
-<div style="font-size:64px;margin-bottom:16px">🎉</div>
-<h1 style="font-size:28px;font-weight:900;margin:0 0 12px">התשלום התקבל!</h1>
-<p style="color:#6b7280;font-size:16px;margin:0 0 24px">הפרטים המלאים נשלחו אליך ב-WhatsApp.<br/>תודה שבחרת בצייד טיסות ✈️</p>
-<a href="/" style="color:#f5a623;text-decoration:none;font-weight:700">חזור לדף הבית</a>
-</div>
-</body>
-</html>`,
-        {
-          headers: new Headers([
-            ["content-type", "text/html; charset=utf-8"],
-            ["access-control-allow-origin", "*"],
-          ]),
-        }
-      );
+      const siteUrl = settings.site_url || "https://tmarchum.github.io/flight-hunter";
+      const redirectTo = `${siteUrl}?page=payment-success&request_id=${requestId}`;
+      return new Response(null, {
+        status: 302,
+        headers: { Location: redirectTo },
+      });
     }
 
     return new Response(

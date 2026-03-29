@@ -141,39 +141,41 @@ serve(async (req) => {
     let paymentUrl = "";
     if (settings.sumit_company_id && settings.sumit_api_key) {
       try {
-        const sumitResp = await fetch("https://api.sumit.co.il/billing/paymentrequest/create", {
+        const sumitResp = await fetch("https://api.sumit.co.il/billing/payments/beginredirect/", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json; charset=utf-8" },
           body: JSON.stringify({
-            CompanyID: settings.sumit_company_id,
-            APIKey: settings.sumit_api_key,
-            Customers: [
-              {
-                Name: request.name,
-                Phone: request.whatsapp,
-                EmailAddress: request.email || "",
-              },
-            ],
+            Credentials: {
+              CompanyID: parseInt(settings.sumit_company_id),
+              APIKey: settings.sumit_api_key,
+            },
+            Customer: {
+              Name: request.name,
+              Phone: request.whatsapp,
+              EmailAddress: request.email || "",
+            },
             Items: [
               {
-                Name:
-                  request.type === "beat"
-                    ? `הכה את המחיר — ${request.from_iata}→${request.to_iata}`
-                    : `דוח מחקר טיסות — ${request.from_iata}→${request.to_iata}`,
-                Price: servicePrice,
+                Item: {
+                  Name: `tsayad hateisot - ${request.id.slice(0, 8)}`,
+                  Price: servicePrice,
+                  Currency: "ILS",
+                },
                 Quantity: 1,
-                Currency: "ILS",
+                UnitPrice: servicePrice,
+                Description: `${request.from_iata} > ${request.to_iata}`,
               },
             ],
+            VATIncluded: true,
             RedirectURL: `${SB_URL}/functions/v1/handle-payment?request_id=${request.id}`,
-            MaxPayments: 1,
-            DraftInvoice: true,
-            SendEmail: !!request.email,
-            SendSMS: false,
+            ExternalIdentifier: request.id,
+            MaximumPayments: 1,
+            SendUpdateByEmailAddress: request.email || "",
+            ExpirationHours: 48,
           }),
         });
         const sumitData = await sumitResp.json();
-        paymentUrl = sumitData.PaymentRequestURL || sumitData.Data?.PaymentRequestURL || "";
+        paymentUrl = sumitData.RedirectURL || sumitData.Data?.RedirectURL || "";
       } catch (e) {
         console.error("SUMIT error:", e);
       }
