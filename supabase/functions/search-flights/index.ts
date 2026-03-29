@@ -25,6 +25,89 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
+// Create SUMIT payment link
+async function createPaymentLink(settings: any, request: any): Promise<string> {
+  if (!settings.sumit_company_id || !settings.sumit_api_key) return "";
+  const servicePrice = parseInt(settings.service_price || "249");
+  try {
+    const resp = await fetch("https://api.sumit.co.il/billing/paymentrequest/create", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        CompanyID: settings.sumit_company_id,
+        APIKey: settings.sumit_api_key,
+        Customers: [{ Name: request.name, Phone: request.whatsapp, EmailAddress: request.email || "" }],
+        Items: [{
+          Name: request.type === "beat"
+            ? `הכה את המחיר — ${request.from_iata}→${request.to_iata}`
+            : `דוח מחקר טיסות — ${request.from_iata}→${request.to_iata}`,
+          Price: servicePrice, Quantity: 1, Currency: "ILS",
+        }],
+        RedirectURL: `${SB_URL}/functions/v1/handle-payment?request_id=${request.id}`,
+        MaxPayments: 1, DraftInvoice: true, SendEmail: !!request.email, SendSMS: false,
+      }),
+    });
+    const data = await resp.json();
+    return data.PaymentRequestURL || data.Data?.PaymentRequestURL || "";
+  } catch (e) {
+    console.error("SUMIT error:", e);
+    return "";
+  }
+}
+
+// Send teaser + payment link to customer, or auto-pay in test mode
+async function sendTeaserWithPayment(sb: any, settings: any, request: any, teaser: string) {
+  const servicePrice = settings.service_price || "249";
+  const testMode = settings.test_mode === "true";
+  const wa = request.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
+  const chatId = `972${wa}@c.us`;
+
+  if (testMode) {
+    // Test mode — send teaser, then auto-pay and send full details
+    let msg = `שלום ${request.name} 👋\n\n`;
+    msg += teaser;
+    msg += `\n\n🧪 *מצב טסט* — תשלום אוטומטי\n`;
+    msg += `_צייד טיסות ✈️_`;
+    await fetch(
+      `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+      { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: msg }) }
+    );
+    // Auto-pay
+    await sb.from("requests").update({
+      status: "paid", payment_id: "TEST_MODE",
+      amount_paid: parseInt(servicePrice), paid_at: new Date().toISOString(),
+    }).eq("id", request.id);
+    // Trigger handle-payment to send full details
+    try {
+      await fetch(`${SB_URL}/functions/v1/handle-payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${SB_KEY}` },
+        body: JSON.stringify({ request_id: request.id, payment_id: "TEST_MODE", amount: parseInt(servicePrice) }),
+      });
+    } catch (e) {
+      console.error("Test mode handle-payment error:", e);
+    }
+    return;
+  }
+
+  // Production — create SUMIT link and send with teaser
+  const paymentUrl = await createPaymentLink(settings, request);
+  let msg = `שלום ${request.name} 👋\n\n`;
+  msg += teaser;
+  msg += `\n\n💳 *לתשלום ₪${servicePrice} וקבלת הפרטים המלאים:*\n`;
+  if (paymentUrl) {
+    msg += `${paymentUrl}\n`;
+  } else {
+    msg += `⚠️ לא הצלחנו ליצור קישור תשלום. צור קשר איתנו.\n`;
+  }
+  msg += `\n_צייד טיסות ✈️_`;
+  await fetch(
+    `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
+    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: msg }) }
+  );
+  await sb.from("requests").update({ status: "awaiting_payment" }).eq("id", request.id);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -48,21 +131,11 @@ serve(async (req) => {
       const sPrice = s.service_price || "249";
       const aiResp = r.ai_response || {};
 
-      // Send TEASER to customer via WhatsApp
+      // Send TEASER + payment link to customer via WhatsApp
       if (s.green_instance && s.green_token) {
-        const wa = r.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
-        const chatId = `972${wa}@c.us`;
-        let msg = `שלום ${r.name} 👋\n\n`;
-        msg += aiResp.customer_teaser || "מצאנו תוצאות מעולות!";
-        msg += `\n\n💳 המחיר לשירות: ₪${sPrice}`;
-        msg += `\nרוצה להמשיך? השב *כן* כדי לקבל קישור לתשלום.`;
-        msg += `\n\n_צייד טיסות ✈️_`;
-        await fetch(
-          `https://api.green-api.com/waInstance${s.green_instance}/sendMessage/${s.green_token}`,
-          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: msg }) }
-        );
+        const teaser = aiResp.customer_teaser || "מצאנו תוצאות מעולות!";
+        await sendTeaserWithPayment(sb, s, r, teaser);
       }
-      await sb.from("requests").update({ status: "sent_price" }).eq("id", reqId);
 
       return new Response(
         `<!DOCTYPE html><html lang="he" dir="rtl"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -285,6 +358,7 @@ serve(async (req) => {
       customerTeaser += `• חפש בתקופה שונה — לפעמים שבוע קודם/אחר עושה הבדל גדול\n\n`;
       customerTeaser += `רוצה לנסות שוב? פשוט שלח בקשה חדשה באתר 🔄\n`;
       customerTeaser += `כמובן — *ללא חיוב* כי לא מצאנו.\n\n`;
+      customerTeaser += `📋 מספר בקשה: ${requestId}\n`;
       customerTeaser += `_צייד טיסות ✈️_`;
     } else if (isBeat) {
       const customerPrice = request.customer_price_usd || 0;
@@ -307,7 +381,8 @@ serve(async (req) => {
         customerTeaser = `🎉 חדשות מעולות!\n\n`;
         customerTeaser += `מצאנו טיסה ב-*$${cheapest}* במקום $${customerPrice} שמצאת!\n`;
         customerTeaser += `💰 חיסכון של *$${saving}* (${savingPct}%)\n\n`;
-        customerTeaser += `לקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.`;
+        customerTeaser += `לקבלת כל הפרטים המלאים (חברה, שעות, קישור הזמנה) — אשר תשלום.\n\n`;
+        customerTeaser += `📋 מספר בקשה: ${requestId}`;
       } else {
         adminSummary = `לא מצאנו מחיר זול יותר מ-$${customerPrice}.\n`;
         adminSummary += `המחיר הזול ביותר שמצאנו: $${cheapest}\n`;
@@ -327,6 +402,7 @@ serve(async (req) => {
         customerTeaser += `• הזמן מוקדם — מחירים עולים ככל שמתקרבים לתאריך\n\n`;
         customerTeaser += `רוצה לנסות שוב עם פרמטרים אחרים? שלח בקשה חדשה 🔄\n`;
         customerTeaser += `כמובן — *ללא חיוב* כי לא הכינו את המחיר.\n\n`;
+        customerTeaser += `📋 מספר בקשה: ${requestId}\n`;
         customerTeaser += `_צייד טיסות ✈️_`;
         status = "not_found";
       }
@@ -351,7 +427,8 @@ serve(async (req) => {
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
       customerTeaser += `🔍 מצאנו *${deduped.length} טיסות*\n`;
       customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n\n`;
-      customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.`;
+      customerTeaser += `לקבלת הדוח המלא עם חברות, שעות וקישורי הזמנה — אשר תשלום.\n\n`;
+      customerTeaser += `📋 מספר בקשה: ${requestId}`;
     }
 
     const aiResponse = {
@@ -441,24 +518,11 @@ serve(async (req) => {
         }
       }
     } else if (settings.green_instance && settings.green_token && status === "found") {
-      // No admin approval — send TEASER to customer (not full details!)
-      const wa = request.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
-      const chatId = `972${wa}@c.us`;
-
-      let whatsappMsg = `שלום ${request.name} 👋\n\n`;
-      whatsappMsg += customerTeaser;
-      whatsappMsg += `\n\n💳 המחיר לשירות: ₪${servicePrice}`;
-      whatsappMsg += `\nרוצה להמשיך? השב *כן* כדי לקבל קישור לתשלום.`;
-      whatsappMsg += `\n\n_צייד טיסות ✈️_`;
-
+      // No admin approval — send TEASER + payment link directly to customer
       try {
-        await fetch(
-          `https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`,
-          { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: whatsappMsg }) }
-        );
-        await sb.from("requests").update({ status: "sent_price" }).eq("id", requestId);
+        await sendTeaserWithPayment(sb, settings, request, customerTeaser);
       } catch (e) {
-        console.error("WhatsApp send error:", e);
+        console.error("WhatsApp/payment send error:", e);
       }
     }
 

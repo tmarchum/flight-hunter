@@ -196,6 +196,7 @@ serve(async (req) => {
         `🔄 ${request.is_one_way ? 'הלוך בלבד' : 'הלוך ושוב'}\n` +
         `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n` +
         `ברגע שהתשלום יאושר — נשלח לך את כל הפרטים המלאים! 🎉\n\n` +
+        `📋 מספר בקשה: ${request.id}\n` +
         `_צייד טיסות ✈️_`;
 
       try {
