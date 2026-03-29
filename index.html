@@ -340,7 +340,16 @@ const FlightForm = ({type, go, price='249'}) => {
   });
   const u = (k,v) => setF(p=>({...p,[k]:v}));
 
-  useEffect(()=>{ DB.getSettings().then(setSettings); },[]);
+  useEffect(()=>{
+    DB.getSettings().then(setSettings);
+    // Auto-fill personal details from previous submission
+    try {
+      const saved = JSON.parse(localStorage.getItem('fh_user')||'{}');
+      if(saved.name) u('name', saved.name);
+      if(saved.whatsapp) u('whatsapp', saved.whatsapp);
+      if(saved.email) u('email', saved.email);
+    } catch(e){}
+  },[]);
 
   const totalSteps = isBeat ? 2 : 3;
 
@@ -362,11 +371,16 @@ const FlightForm = ({type, go, price='249'}) => {
     };
     const {data,error} = await DB.insertRequest(row);
     if (!error) {
+      // Save personal details for auto-fill next time
+      try { localStorage.setItem('fh_user', JSON.stringify({name:f.name, whatsapp:f.whatsapp, email:f.email})); } catch(e){}
       // Send immediate WhatsApp confirmation to customer
       if (settings.green_instance && settings.green_token) {
         const wa = f.whatsapp.replace(/^0/,'').replace(/[^0-9]/g,'');
         const sPrice = settings.service_price||'249';
-        const msg = `שלום ${f.name} 👋\n\n✅ הבקשה שלך התקבלה!\n\n✈️ ${f.from_iata} → ${f.to_iata}\n📅 ${f.depart_date}${f.return_date?' — '+f.return_date:''}\n👥 ${f.adults} נוסעים\n${isBeat?'💰 המחיר שמצאת: $'+f.customer_price_usd:'📊 סוג: דוח מחקר'}\n\nהמערכת מחפשת עבורך כרגע בכל המקורות.\nנעדכן אותך ב-WhatsApp ברגע שנסיים! 🔍\n💰 עלות השירות: ₪${sPrice} — רק אם הצלחנו\n\n_צייד טיסות_`;
+        const fromHe = AIRPORTS.find(a=>a.iata===f.from_iata)?.he||f.from_iata;
+        const toHe = AIRPORTS.find(a=>a.iata===f.to_iata)?.he||f.to_iata;
+        const tripType = f.is_one_way ? 'הלוך בלבד' : 'הלוך ושוב';
+        const msg = `שלום ${f.name} 👋\n\n✅ הבקשה שלך התקבלה!\n\n✈️ ${fromHe} (${f.from_iata}) → ${toHe} (${f.to_iata})\n🔄 ${tripType}\n📅 ${f.depart_date}${f.return_date?' — '+f.return_date:''}\n👥 ${f.adults} נוסעים\n${isBeat?'💰 המחיר שמצאת: $'+f.customer_price_usd:'📊 סוג: דוח מחקר'}\n\nהמערכת מחפשת עבורך כרגע בכל המקורות.\nנעדכן אותך ב-WhatsApp ברגע שנסיים! 🔍\n💰 עלות השירות: ₪${sPrice} — רק אם הצלחנו\n\n_צייד טיסות_`;
         try { await fetch(`https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chatId:`972${wa}@c.us`,message:msg})}); } catch(e){}
       }
       // Trigger Make.com search webhook (include API keys so Make.com doesn't need to fetch them)
@@ -411,7 +425,7 @@ const FlightForm = ({type, go, price='249'}) => {
               <CitySearch label="לאן" value={f.to_iata} displayValue={toDisplay} onChange={(iata,display)=>{u('to_iata',iata);setToDisplay(display);}} placeholder="רומא, פריז..." />
             </div>
             <div style={{marginBottom:10}}><span className="lbl">תאריך יציאה</span><input type="date" value={f.depart_date} onChange={e=>u('depart_date',e.target.value)}/></div>
-            {!f.is_one_way && <div style={{marginBottom:10}}><span className="lbl">תאריך חזרה</span><input type="date" value={f.return_date} onChange={e=>u('return_date',e.target.value)}/></div>}
+            {!f.is_one_way && <div style={{marginBottom:10}}><span className="lbl">תאריך חזרה</span><input type="date" value={f.return_date} min={f.depart_date} onChange={e=>u('return_date',e.target.value)}/></div>}
             <label style={{display:'flex',alignItems:'center',gap:8,fontSize:14,marginBottom:14,cursor:'pointer'}}>
               <input type="checkbox" checked={f.is_one_way} onChange={e=>u('is_one_way',e.target.checked)} style={{width:'auto',padding:0,border:'none'}}/> כיוון אחד בלבד
             </label>
@@ -467,9 +481,9 @@ const FlightForm = ({type, go, price='249'}) => {
           {/* Personal info step (step 2 for beat, step 3 for research) */}
           {((isBeat && step===2) || (!isBeat && step===3)) && <div className="fade-in">
             <h2 style={{fontSize:18,fontWeight:700,margin:'0 0 16px'}}>פרטים אישיים</h2>
-            <div style={{marginBottom:10}}><span className="lbl">שם מלא</span><input placeholder="ישראל ישראלי" value={f.name} onChange={e=>u('name',e.target.value)}/></div>
-            <div style={{marginBottom:10}}><span className="lbl">WhatsApp 📱</span><input type="tel" placeholder="0501234567" value={f.whatsapp} onChange={e=>u('whatsapp',e.target.value)}/><p style={{fontSize:11,color:'#6b7280',marginTop:4}}>לכאן נשלח את התוצאות</p></div>
-            <div style={{marginBottom:16}}><span className="lbl">אימייל (אופציונלי)</span><input type="email" placeholder="you@mail.com" value={f.email} onChange={e=>u('email',e.target.value)}/></div>
+            <div style={{marginBottom:10}}><span className="lbl">שם מלא</span><input name="name" autoComplete="name" placeholder="ישראל ישראלי" value={f.name} onChange={e=>u('name',e.target.value)}/></div>
+            <div style={{marginBottom:10}}><span className="lbl">WhatsApp 📱</span><input type="tel" name="phone" autoComplete="tel" placeholder="0501234567" value={f.whatsapp} onChange={e=>u('whatsapp',e.target.value)}/><p style={{fontSize:11,color:'#6b7280',marginTop:4}}>לכאן נשלח את התוצאות</p></div>
+            <div style={{marginBottom:16}}><span className="lbl">אימייל (אופציונלי)</span><input type="email" name="email" autoComplete="email" placeholder="you@mail.com" value={f.email} onChange={e=>u('email',e.target.value)}/></div>
             <div style={{background:'#0a0a0f',border:'1px solid #1e1e2e',borderRadius:12,padding:14,fontSize:14,marginBottom:12}}>
               <div style={{fontWeight:700,marginBottom:6}}>סיכום:</div>
               <div style={{color:'#9ca3af'}}>✈️ {f.from_iata} → {f.to_iata}</div>

@@ -4,6 +4,22 @@ import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 const SB_URL = "https://stncskqjrmecjckxldvi.supabase.co";
 const SB_KEY = "sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I";
 
+// Hebrew airport names for WhatsApp messages
+const AIRPORT_NAMES: Record<string, string> = {
+  TLV:'תל אביב',ETH:'אילת',LHR:'לונדון',LGW:'לונדון',CDG:'פריז',ORY:'פריז',
+  FCO:'רומא',MXP:'מילאנו',VCE:'ונציה',NAP:'נאפולי',BCN:'ברצלונה',MAD:'מדריד',
+  ATH:'אתונה',SKG:'סלוניקי',HER:'כרתים',RHO:'רודוס',JMK:'מיקונוס',JTR:'סנטוריני',
+  BER:'ברלין',MUC:'מינכן',FRA:'פרנקפורט',AMS:'אמסטרדם',BRU:'בריסל',
+  VIE:'וינה',ZRH:'ציריך',GVA:'ז\'נבה',PRG:'פראג',BUD:'בודפשט',WAW:'ורשה',KRK:'קרקוב',
+  CPH:'קופנהגן',OSL:'אוסלו',ARN:'סטוקהולם',LIS:'ליסבון',OPO:'פורטו',DUB:'דבלין',
+  IST:'איסטנבול',AYT:'אנטליה',SOF:'סופיה',OTP:'בוקרשט',
+  JFK:'ניו יורק',EWR:'ניו יורק',LAX:'לוס אנג\'לס',SFO:'סן פרנסיסקו',MIA:'מיאמי',
+  BKK:'בנגקוק',HKT:'פוקט',DEL:'ניו דלהי',DXB:'דובאי',AMM:'עמאן',
+  LCA:'לרנקה',SSH:'שארם א-שייח',HRG:'הורגדה',
+};
+const heCity = (iata: string) => AIRPORT_NAMES[iata] ? `${AIRPORT_NAMES[iata]} (${iata})` : iata;
+const tripLabel = (r: any) => r.is_one_way ? 'הלוך בלבד' : 'הלוך ושוב';
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -266,7 +282,8 @@ serve(async (req) => {
     } else {
       // Research
       adminSummary = `📊 דוח מחקר טיסות\n`;
-      adminSummary += `${request.from_iata} → ${request.to_iata}\n`;
+      adminSummary += `${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+      adminSummary += `🔄 ${tripLabel(request)}\n`;
       adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
       adminSummary += `🏆 5 הדילים הכי טובים:\n\n`;
       for (let i = 0; i < Math.min(5, results.length); i++) {
@@ -277,7 +294,8 @@ serve(async (req) => {
 
       // Customer gets teaser — cheapest price yes, full details no
       customerTeaser = `📊 הדוח שלך מוכן!\n\n`;
-      customerTeaser += `✈️ ${request.from_iata} → ${request.to_iata}\n`;
+      customerTeaser += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+      customerTeaser += `🔄 ${tripLabel(request)}\n`;
       customerTeaser += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
       customerTeaser += `🔍 מצאנו *${results.length} טיסות*\n`;
       customerTeaser += `💰 המחיר הזול ביותר: *$${cheapest}*\n\n`;
@@ -317,7 +335,8 @@ serve(async (req) => {
         const adminChatId = `972${adminWa}@c.us`;
         let adminMsg = `🔔 *בקשה חדשה מחכה לאישורך!*\n\n`;
         adminMsg += `👤 ${request.name} (${request.whatsapp})\n`;
-        adminMsg += `✈️ ${request.from_iata} → ${request.to_iata}\n`;
+        adminMsg += `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`;
+        adminMsg += `🔄 ${tripLabel(request)}\n`;
         adminMsg += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n`;
         adminMsg += `👥 ${request.adults} נוסעים\n\n`;
         adminMsg += adminSummary;
