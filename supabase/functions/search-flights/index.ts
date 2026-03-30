@@ -240,20 +240,97 @@ serve(async (req) => {
     // Update status to searching
     await sb.from("requests").update({ status: "searching" }).eq("id", requestId);
 
-    // ---------- VIP requests — notify admin with free text, no search ----------
+    // ---------- VIP requests — AI analysis + admin notification ----------
     if (request.type === "vip") {
+      const vipNotes = request.notes || "(ללא פרטים)";
+
+      // Step 1: Use Claude AI to analyze the free text request
+      let aiAnalysis = "";
+      let aiTasks: string[] = [];
+      if (settings.claude_key) {
+        try {
+          const aiResp = await fetch("https://api.anthropic.com/v1/messages", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-api-key": settings.claude_key,
+              "anthropic-version": "2023-06-01",
+            },
+            body: JSON.stringify({
+              model: "claude-haiku-4-5-20251001",
+              max_tokens: 1024,
+              messages: [{
+                role: "user",
+                content: `אתה עוזר של סוכן נסיעות ישראלי. לקוח שלח בקשת VIP בטקסט חופשי. נתח את הבקשה ופרק אותה למשימות מסודרות עבור סוכן אנושי.
+
+בקשת הלקוח:
+"${vipNotes}"
+
+פרטי הלקוח:
+שם: ${request.name}
+טלפון: ${request.whatsapp}
+${request.email ? "אימייל: " + request.email : ""}
+
+ענה בעברית בפורמט הבא בדיוק (ללא markdown):
+
+סיכום:
+[משפט אחד שמסכם מה הלקוח רוצה]
+
+פרטים שזוהו:
+• יעד: [יעד/ים]
+• תאריכים: [תאריכים אם צוינו, אחרת "לא צוין"]
+• נוסעים: [מספר ופירוט אם צוין]
+• תקציב: [תקציב אם צוין, אחרת "לא צוין"]
+• העדפות: [ישירה/עצירות/חברה מועדפת/מחלקה וכו']
+• הערות מיוחדות: [כל דבר נוסף]
+
+משימות לסוכן:
+1. [משימה ראשונה]
+2. [משימה שניה]
+3. [וכו']
+
+מידע חסר (לברר עם הלקוח):
+• [פרט חסר 1]
+• [פרט חסר 2]`
+              }],
+            }),
+          });
+          const aiData = await aiResp.json();
+          aiAnalysis = aiData.content?.[0]?.text || "";
+          // Extract tasks
+          const taskMatch = aiAnalysis.match(/משימות לסוכן:\n([\s\S]*?)(?:\n\n|מידע חסר)/);
+          if (taskMatch) {
+            aiTasks = taskMatch[1].split("\n").filter((l: string) => l.trim().match(/^\d+\./)).map((l: string) => l.trim());
+          }
+        } catch (e) {
+          console.error("Claude AI VIP analysis error:", e);
+          aiAnalysis = "⚠️ ניתוח AI לא זמין כרגע";
+        }
+      }
+
+      // Step 2: Save analysis to DB
       await sb.from("requests").update({
         status: "found",
-        ai_response: { admin_summary: `👑 *בקשת VIP*\n\n${request.notes || '(ללא פרטים)'}`, customer_teaser: "", results: [] },
+        ai_response: {
+          type: "vip",
+          raw_request: vipNotes,
+          ai_analysis: aiAnalysis,
+          ai_tasks: aiTasks,
+          admin_summary: `👑 *בקשת VIP*\n\n${vipNotes}`,
+          customer_teaser: "",
+          customer_full: "",
+          results: [],
+        },
       }).eq("id", requestId);
 
+      // Step 3: Send confirmation to customer
       if (settings.green_instance && settings.green_token) {
-        // Confirm to customer
         const wa = request.whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
         const chatId = `972${wa}@c.us`;
         let custMsg = `שלום ${request.name} 👋\n\n`;
         custMsg += `👑 *בקשת ה-VIP שלך התקבלה!*\n\n`;
-        custMsg += `סוכן אישי יבדוק את הבקשה ויחזור אליך בהקדם.\n\n`;
+        custMsg += `סוכן אישי מנתח את הבקשה שלך כרגע ויחזור אליך בהקדם עם הצעה מותאמת אישית.\n\n`;
+        custMsg += `💰 עלות שירות VIP: ₪${settings.vip_price || '299'}\n`;
         custMsg += `📋 מספר בקשה: ${requestId}\n`;
         custMsg += `_צייד טיסות ✈️_`;
         await fetch(
@@ -261,15 +338,20 @@ serve(async (req) => {
           { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ chatId, message: custMsg }) }
         );
 
-        // Notify admin
+        // Step 4: Send AI analysis to admin
         if (settings.admin_whatsapp) {
           const adminWa = settings.admin_whatsapp.replace(/^0/, "").replace(/[^0-9]/g, "");
           const adminChatId = `972${adminWa}@c.us`;
           let adminMsg = `👑 *בקשת VIP חדשה!*\n\n`;
-          adminMsg += `👤 ${request.name} (${request.whatsapp})\n`;
+          adminMsg += `👤 *לקוח:* ${request.name} (${request.whatsapp})\n`;
           if (request.email) adminMsg += `📧 ${request.email}\n`;
-          adminMsg += `\n📝 *תוכן הבקשה:*\n${request.notes || '(ללא פרטים)'}\n\n`;
-          adminMsg += `💰 מחיר VIP: ₪${settings.vip_price || '299'}\n`;
+          adminMsg += `\n📝 *הבקשה המקורית:*\n${vipNotes}\n`;
+
+          if (aiAnalysis) {
+            adminMsg += `\n🤖 *ניתוח AI:*\n${aiAnalysis}\n`;
+          }
+
+          adminMsg += `\n💰 מחיר VIP: ₪${settings.vip_price || '299'}\n`;
           adminMsg += `📋 בקשה: ${requestId}\n\n`;
           adminMsg += `_צייד טיסות ✈️_`;
           await fetch(

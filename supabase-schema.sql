@@ -8,7 +8,7 @@ create table if not exists requests (
   created_at timestamptz default now(),
 
   -- סוג בקשה
-  type text not null check (type in ('beat', 'research')),
+  type text not null check (type in ('beat', 'research', 'vip')),
 
   -- פרטי לקוח
   name text not null,
