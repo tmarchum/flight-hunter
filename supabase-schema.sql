@@ -73,7 +73,6 @@ insert into settings (key, value) values
   ('sumit_api_key', ''),
   ('admin_password', 'hunter2025'),
   ('service_price', '249'),
-  ('vip_price', '399'),
   ('test_mode', 'false'),
   ('admin_approval', 'true'),
   ('webhook_search', 'https://stncskqjrmecjckxldvi.supabase.co/functions/v1/search-flights'),
