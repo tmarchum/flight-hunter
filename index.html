@@ -84,14 +84,22 @@ const DB = {
     const {error} = await sb.from('requests').update(updates).eq('id',id);
     return {error};
   },
-  async getSettings() {
-    const {data} = await sb.from('settings').select('*');
-    const map = {};
-    (data||[]).forEach(r => map[r.key] = r.value);
-    return map;
+  // Public settings — anon-readable subset (price, webhooks, test_mode, site_url).
+  // Used by the customer-facing pages.
+  async getPublicSettings() {
+    const {data} = await sb.rpc('get_public_settings');
+    return data || {};
   },
-  async saveSetting(key, value) {
-    await sb.from('settings').update({value, updated_at: new Date().toISOString()}).eq('key',key);
+  // Admin settings — full read, password-gated. Throws if password is wrong.
+  async getAdminSettings(password) {
+    const {data, error} = await sb.rpc('get_admin_settings', {p_password: password});
+    if (error) throw error;
+    return data || {};
+  },
+  // Save a single setting. Password-gated; admin password must be passed in.
+  async saveAdminSetting(password, key, value) {
+    const {error} = await sb.rpc('set_admin_setting', {p_password: password, p_key: key, p_value: value});
+    if (error) throw error;
   }
 };
 
@@ -400,7 +408,7 @@ const FlightForm = ({type, go, price='249'}) => {
   const u = (k,v) => setF(p=>({...p,[k]:v}));
 
   useEffect(()=>{
-    DB.getSettings().then(setSettings);
+    DB.getPublicSettings().then(setSettings);
     // Auto-fill personal details from previous submission
     try {
       const saved = JSON.parse(localStorage.getItem('fh_user')||'{}');
@@ -581,9 +589,11 @@ const FlightForm = ({type, go, price='249'}) => {
 
 // ============ ADMIN DASHBOARD ============
 const Admin = ({go}) => {
-  const [authed, setAuthed] = useState(sessionStorage.getItem('fh_admin')==='1');
+  // adminPw is the password used to authenticate against the password-gated
+  // settings RPCs. Restored from sessionStorage so refreshes don't log you out.
+  const [adminPw, setAdminPw] = useState(sessionStorage.getItem('fh_admin_pw') || '');
+  const [authed, setAuthed] = useState(!!sessionStorage.getItem('fh_admin_pw'));
   const [pw, setPw] = useState('');
-  const [adminPw, setAdminPw] = useState('hunter2025');
   const [view, setView] = useState('requests'); // requests | settings
   const [requests, setRequests] = useState([]);
   const [settings, setSettings] = useState({});
@@ -593,13 +603,21 @@ const Admin = ({go}) => {
   const [note, setNote] = useState('');
 
   const load = useCallback(async () => {
+    if (!adminPw) return;
     setLoading(true);
-    const [reqs, sets] = await Promise.all([DB.getRequests(), DB.getSettings()]);
-    setRequests(reqs);
-    setSettings(sets);
-    if(sets.admin_password) setAdminPw(sets.admin_password);
+    try {
+      const [reqs, sets] = await Promise.all([DB.getRequests(), DB.getAdminSettings(adminPw)]);
+      setRequests(reqs);
+      setSettings(sets);
+    } catch (e) {
+      // Password no longer valid (rotated server-side) — kick back to login.
+      sessionStorage.removeItem('fh_admin_pw');
+      setAuthed(false);
+      setAdminPw('');
+      alert('הסשן פג תוקף, התחבר מחדש');
+    }
     setLoading(false);
-  }, []);
+  }, [adminPw]);
 
   useEffect(()=>{ if(authed) load(); },[authed,load]);
   // Auto-refresh every 30 seconds
@@ -609,9 +627,16 @@ const Admin = ({go}) => {
     return ()=>clearInterval(iv);
   },[authed,load]);
 
-  const login = () => {
-    if(pw===adminPw || pw==='hunter2025') { setAuthed(true); sessionStorage.setItem('fh_admin','1'); }
-    else alert('סיסמה שגויה');
+  const login = async () => {
+    try {
+      // Verify password by attempting the password-gated read.
+      await DB.getAdminSettings(pw);
+      setAdminPw(pw);
+      setAuthed(true);
+      sessionStorage.setItem('fh_admin_pw', pw);
+    } catch (e) {
+      alert('סיסמה שגויה');
+    }
   };
 
   const setStatus = async (id,status) => {
@@ -630,8 +655,17 @@ const Admin = ({go}) => {
   };
 
   const saveSetting = async (key,val) => {
-    await DB.saveSetting(key,val);
-    setSettings(s=>({...s,[key]:val}));
+    try {
+      await DB.saveAdminSetting(adminPw, key, val);
+      setSettings(s=>({...s,[key]:val}));
+      // If the admin just changed their own password, update the saved auth.
+      if (key === 'admin_password') {
+        setAdminPw(val);
+        sessionStorage.setItem('fh_admin_pw', val);
+      }
+    } catch (e) {
+      alert('שמירה נכשלה — בדוק שהסיסמה תקינה');
+    }
   };
 
   const filtered = requests.filter(r =>
@@ -1077,7 +1111,7 @@ const App = () => {
   const initialPage = params.get('page') === 'payment-success' ? 'payment-success' : 'home';
   const [page, setPage] = useState(initialPage);
   const [globalSettings, setGlobalSettings] = useState({});
-  useEffect(()=>{ DB.getSettings().then(setGlobalSettings); },[]);
+  useEffect(()=>{ DB.getPublicSettings().then(setGlobalSettings); },[]);
   const price = globalSettings.service_price || '249';
   const vipPrice = globalSettings.vip_price || '299';
   const pages = {
