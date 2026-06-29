@@ -70,6 +70,14 @@ serve(async (req) => {
       return jsonResp({ success: true, action: "ignored", reason: "outgoing" });
     }
 
+    // Skip group messages — the business number is a member of personal
+    // WhatsApp groups too, and group chatter is not customer support.
+    // Group chatIds end in "@g.us"; 1-on-1 chats end in "@c.us".
+    const chatId = body.senderData?.chatId || "";
+    if (chatId.endsWith("@g.us")) {
+      return jsonResp({ success: true, action: "ignored", reason: "group message" });
+    }
+
     const senderPhoneRaw =
       body.senderData?.sender?.replace("@c.us", "") || body.phone || body.from || "";
     const messageText = (
