@@ -126,7 +126,16 @@ serve(async (req) => {
       return jsonResp({ success: true, action: "yes_handled", request_id: request.id });
     }
 
-    // Any other message FROM a known customer → forward to admin with context
+    // Only forward when the ball is in our court — customer is waiting on
+    // us (admin approval, payment hangup, or search-in-progress). Skip once
+    // they've already received results (paid/sent) or the request resolved
+    // with no match (not_found/failed).
+    const ACTIVE_STATUSES = ["pending", "searching", "found", "awaiting_payment"];
+    if (!ACTIVE_STATUSES.includes(request.status)) {
+      return jsonResp({ success: true, action: "ignored", reason: `customer status '${request.status}' — not active` });
+    }
+
+    // Forward to admin with context
     if (settings.admin_whatsapp && messageText) {
       const ctx = request.from_iata
         ? `✈️ ${heCity(request.from_iata)} → ${heCity(request.to_iata)}\n`
