@@ -6,7 +6,7 @@
 alter table requests add column if not exists reminded_at timestamptz;
 
 -- Secret for the sweep endpoint (pg_cron includes it; blocks public spam)
-insert into settings (key, value) values ('sweep_key', '73bc8f88ecb6bd001d80d664311ede2b8ba4078ea073368b')
+insert into settings (key, value) values ('sweep_key', '<ROTATED — value lives only in settings table>')
 on conflict (key) do update set value = excluded.value;
 
 -- Enable extensions (idempotent)
@@ -22,7 +22,7 @@ select cron.schedule(
   '*/15 * * * *',
   $$
   select net.http_get(
-    url := 'https://stncskqjrmecjckxldvi.supabase.co/functions/v1/search-flights?action=sweep&key=73bc8f88ecb6bd001d80d664311ede2b8ba4078ea073368b',
+    url := 'https://stncskqjrmecjckxldvi.supabase.co/functions/v1/search-flights?action=sweep&key=<ROTATED — value lives only in settings table>',
     timeout_milliseconds := 30000
   );
   $$

@@ -49,7 +49,7 @@ end;
 $$;
 
 -- ---- Rotate the leaked admin password ----------------------------------------
-update settings set value = 'FH764ee98389d87fc386b1' where key = 'admin_password';
+update settings set value = '<ROTATED — set via set_admin_setting>' where key = 'admin_password';
 
 -- ---- Drop the open policies ---------------------------------------------------
 -- settings: NO anon access at all (RPCs only)
