@@ -100,11 +100,16 @@ serve(async (req) => {
     const { data: settingsData } = await sb.rpc("get_settings_json");
     const settings = settingsData || {};
 
-    // Lookup request: most recent for this phone (any status)
+    // Lookup request: most recent for this phone (any status).
+    // The form historically stored whatever the customer typed, so the DB
+    // holds mixed formats: "05XXXXXXXX", "+972XXXXXXXXX", "972XXXXXXXXX",
+    // and even "5XXXXXXXX" — match all variants.
+    const bare = localPhone.replace(/^0/, ""); // "5XXXXXXXX"
+    const variants = [localPhone, bare, `972${bare}`, `+972${bare}`];
     const { data: requests } = await sb
       .from("requests")
       .select("*")
-      .eq("whatsapp", localPhone)
+      .in("whatsapp", variants)
       .order("created_at", { ascending: false })
       .limit(1);
     const request = requests?.[0];

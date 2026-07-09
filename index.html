@@ -420,10 +420,20 @@ const FlightForm = ({type, go, price='249'}) => {
 
   const totalSteps = isBeat ? 2 : 3;
 
+  // Normalize phone to canonical local format "05XXXXXXXX":
+  // accepts "+972 50-...", "972...", "50..." and plain "05..."
+  const normPhone = (p) => {
+    let d = (p||'').replace(/[^0-9]/g,'');
+    if (d.startsWith('972')) d = '0' + d.slice(3);
+    if (!d.startsWith('0') && d.length === 9) d = '0' + d;
+    return d;
+  };
+
   const submit = async () => {
     setLoading(true);
+    const phone = normPhone(f.whatsapp);
     const row = {
-      type, name:f.name, whatsapp:f.whatsapp, email:f.email||null,
+      type, name:f.name, whatsapp:phone, email:f.email||null,
       from_iata:f.from_iata, to_iata:f.to_iata, depart_date:f.depart_date,
       return_date:f.return_date||null, is_one_way:f.is_one_way,
       adults:parseInt(f.adults), children:parseInt(f.children),
@@ -439,28 +449,12 @@ const FlightForm = ({type, go, price='249'}) => {
     const {data,error} = await DB.insertRequest(row);
     if (!error) {
       // Save personal details for auto-fill next time
-      try { localStorage.setItem('fh_user', JSON.stringify({name:f.name, whatsapp:f.whatsapp, email:f.email})); } catch(e){}
-      // Send immediate WhatsApp confirmation to customer
-      if (settings.green_instance && settings.green_token) {
-        const wa = f.whatsapp.replace(/^0/,'').replace(/[^0-9]/g,'');
-        const sPrice = settings.service_price||'249';
-        const fromHe = AIRPORTS.find(a=>a.iata===f.from_iata)?.he||f.from_iata;
-        const toHe = AIRPORTS.find(a=>a.iata===f.to_iata)?.he||f.to_iata;
-        const tripType = f.is_one_way ? 'הלוך בלבד' : 'הלוך ושוב';
-        const msg = `שלום ${f.name} 👋\n\n✅ הבקשה שלך התקבלה!\n\n✈️ ${fromHe} (${f.from_iata}) → ${toHe} (${f.to_iata})\n🔄 ${tripType}\n📅 ${f.depart_date}${f.return_date?' — '+f.return_date:''}\n👥 ${f.adults} נוסעים\n${isBeat?'💰 המחיר שמצאת: $'+f.customer_price_usd:'📊 סוג: דוח מחקר'}\n\nהמערכת מחפשת עבורך כרגע בכל המקורות.\nנעדכן אותך ב-WhatsApp ברגע שנסיים! 🔍\n💰 עלות השירות: ₪${sPrice} — רק אם הצלחנו\n\n_צייד טיסות_`;
-        try { await fetch(`https://api.green-api.com/waInstance${settings.green_instance}/sendMessage/${settings.green_token}`, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({chatId:`972${wa}@c.us`,message:msg})}); } catch(e){}
-      }
-      // Trigger Make.com search webhook (include API keys so Make.com doesn't need to fetch them)
+      try { localStorage.setItem('fh_user', JSON.stringify({name:f.name, whatsapp:phone, email:f.email})); } catch(e){}
+      // Trigger the search Edge Function. It handles the customer ack,
+      // engine search, and admin notification server-side — API keys and
+      // the Green token never touch the browser.
       if (settings.webhook_search) {
-        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
-          ...row,
-          id: data?.id,
-          serpapi_key: settings.serpapi_key||'',
-          skyfare_key: settings.skyfare_key||'',
-          claude_key: settings.claude_key||'',
-          green_instance: settings.green_instance||'',
-          green_token: settings.green_token||''
-        })}); } catch(e){}
+        try { await fetch(settings.webhook_search, {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${SB_KEY}`},body:JSON.stringify({id: data?.id})}); } catch(e){}
       }
     }
     setLoading(false);
@@ -1009,11 +1003,15 @@ const VipForm = ({go, vipPrice='299'}) => {
 
   const submit = async () => {
     setLoading(true);
+    // Same canonical phone format as the flight forms ("05XXXXXXXX")
+    let phone = (f.whatsapp||'').replace(/[^0-9]/g,'');
+    if (phone.startsWith('972')) phone = '0' + phone.slice(3);
+    if (!phone.startsWith('0') && phone.length === 9) phone = '0' + phone;
     localStorage.setItem('fh_name',f.name);
-    localStorage.setItem('fh_phone',f.whatsapp);
+    localStorage.setItem('fh_phone',phone);
     localStorage.setItem('fh_email',f.email);
     const {data,error} = await DB.insertRequest({
-      name:f.name, whatsapp:f.whatsapp, email:f.email||null,
+      name:f.name, whatsapp:phone, email:f.email||null,
       type:'vip', status:'pending',
       from_iata:'VIP', to_iata:'VIP',
       depart_date: new Date().toISOString().slice(0,10),
