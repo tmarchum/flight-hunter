@@ -72,16 +72,28 @@ const SB_KEY = 'sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I';
 const sb = window.supabase.createClient(SB_URL, SB_KEY);
 
 const DB = {
-  async getRequests() {
-    const {data,error} = await sb.from('requests').select('*').order('created_at',{ascending:false});
-    return error ? [] : data;
+  // Admin-only: full request list via password-gated RPC (RLS blocks direct reads)
+  async getRequests(password) {
+    const {data,error} = await sb.rpc('get_admin_requests', {p_password: password});
+    if (error) throw error;
+    return data || [];
   },
+  // Insert with a client-generated id and no RETURNING — the anon role has
+  // insert-only access, so we can't select the row back.
   async insertRequest(row) {
-    const {data,error} = await sb.from('requests').insert([row]).select().single();
-    return {data,error};
+    const id = crypto.randomUUID();
+    const {error} = await sb.from('requests').insert([{...row, id}]);
+    return {data: error ? null : {id}, error};
   },
-  async updateRequest(id, updates) {
-    const {error} = await sb.from('requests').update(updates).eq('id',id);
+  // Admin-only: status/notes updates via password-gated RPC
+  async updateRequest(password, id, updates) {
+    const {error} = await sb.rpc('update_admin_request', {
+      p_password: password, p_id: id,
+      p_status: updates.status ?? null,
+      p_admin_notes: updates.admin_notes ?? null,
+      p_sent_at: updates.sent_at ?? null,
+      p_paid_at: updates.paid_at ?? null,
+    });
     return {error};
   },
   // Public settings — anon-readable subset (price, webhooks, test_mode, site_url).
@@ -600,7 +612,7 @@ const Admin = ({go}) => {
     if (!adminPw) return;
     setLoading(true);
     try {
-      const [reqs, sets] = await Promise.all([DB.getRequests(), DB.getAdminSettings(adminPw)]);
+      const [reqs, sets] = await Promise.all([DB.getRequests(adminPw), DB.getAdminSettings(adminPw)]);
       setRequests(reqs);
       setSettings(sets);
     } catch (e) {
@@ -637,13 +649,13 @@ const Admin = ({go}) => {
     const updates = {status};
     if(status==='sent') updates.sent_at = new Date().toISOString();
     if(status==='paid') updates.paid_at = new Date().toISOString();
-    await DB.updateRequest(id, updates);
+    await DB.updateRequest(adminPw, id, updates);
     setRequests(rs=>rs.map(r=>r.id===id?{...r,...updates}:r));
     if(sel?.id===id) setSel(s=>({...s,...updates}));
   };
 
   const saveNote = async () => {
-    await DB.updateRequest(sel.id, {admin_notes:note});
+    await DB.updateRequest(adminPw, sel.id, {admin_notes:note});
     setRequests(rs=>rs.map(r=>r.id===sel.id?{...r,admin_notes:note}:r));
     setSel(s=>({...s,admin_notes:note}));
   };

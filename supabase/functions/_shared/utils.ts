@@ -5,12 +5,14 @@
 // ---- Supabase / CORS ---------------------------------------------------------
 
 export const SB_URL =
-  Deno.env.get("SB_URL") ?? "https://stncskqjrmecjckxldvi.supabase.co";
+  Deno.env.get("SUPABASE_URL") ?? "https://stncskqjrmecjckxldvi.supabase.co";
 // Publishable key is ok to embed — RLS + SECURITY DEFINER RPCs gate access.
 export const SB_PUBLISHABLE =
   Deno.env.get("SB_PUBLISHABLE_KEY") ?? "sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I";
-// Optional service-role key (set via Supabase secrets) — bypasses RLS for trusted server work.
-export const SB_SERVICE = Deno.env.get("SB_SERVICE_ROLE_KEY") ?? "";
+// Service-role key — auto-injected by the Edge runtime. Functions run trusted
+// server-side code, so they use this and stay unaffected by the RLS lockdown.
+export const SB_SERVICE =
+  Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? SB_PUBLISHABLE;
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",

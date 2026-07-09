@@ -5,7 +5,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import {
-  SB_URL, SB_PUBLISHABLE,
+  SB_URL, SB_PUBLISHABLE, SB_SERVICE,
   corsHeaders, jsonResponse, htmlResponse,
   AIRPORT_NAMES, heCity, tripLabel,
   normalizeIsraeliPhone, toChatId,
@@ -623,6 +623,65 @@ function buildDirectionSummary(deduped: FlightResult[], dirLabel: string, fromIa
 }
 
 // =============================================================
+// Sweep handler (GET ?action=sweep) — invoked by pg_cron every 15 min
+// =============================================================
+
+async function handleSweep(sb: any, settings: any): Promise<Response> {
+  const results = { recovered: 0, reminded: 0 };
+
+  // 1. Recover stuck "searching" rows older than 10 minutes
+  const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+  const { data: stuck } = await sb.from("requests")
+    .select("id").eq("status", "searching").lt("created_at", tenMinAgo);
+  if (stuck && stuck.length > 0) {
+    await sb.from("requests").update({
+      status: "failed",
+      admin_notes: "auto-recovered: stuck in searching >10min",
+    }).in("id", stuck.map((r: any) => r.id));
+    results.recovered = stuck.length;
+    logInfo("sweep.recovered", { count: stuck.length });
+  }
+
+  // 2. Remind admin about approval-pending requests older than 1 hour.
+  //    Re-remind at most once per 24h per request (tracked in reminded_at).
+  const hourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
+  const dayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const { data: pending } = await sb.from("requests")
+    .select("id, name, whatsapp, type, from_iata, to_iata, depart_date, cheapest_found, created_at, reminded_at")
+    .eq("status", "found")
+    .lt("created_at", hourAgo)
+    .order("created_at", { ascending: true })
+    .limit(10);
+
+  const toRemind = (pending || []).filter((r: any) =>
+    !r.reminded_at || r.reminded_at < dayAgo
+  );
+
+  if (toRemind.length > 0 && settings.admin_whatsapp) {
+    let msg = `⏰ *תזכורת: ${toRemind.length} בקשות מחכות לאישורך!*\n\n`;
+    for (const r of toRemind) {
+      const age = Math.round((Date.now() - new Date(r.created_at).getTime()) / 3600_000);
+      msg += r.type === "vip"
+        ? `👑 VIP — ${r.name}`
+        : `✈️ ${heCity(r.from_iata)} → ${heCity(r.to_iata)} — ${r.name}`;
+      if (r.cheapest_found) msg += ` (מ-$${r.cheapest_found})`;
+      msg += ` — לפני ${age} שע'\n`;
+      msg += `   ✅ ${SB_URL}/functions/v1/search-flights?action=approve&request_id=${r.id.slice(0, 8)}\n`;
+    }
+    msg += `\n_לקוחות מחכים — כל שעה שעוברת מורידה את הסיכוי לסגירה._\n_צייד טיסות ✈️_`;
+    const sendRes = await sendWhatsApp(settings, settings.admin_whatsapp, msg);
+    if (sendRes.ok) {
+      await sb.from("requests").update({ reminded_at: new Date().toISOString() })
+        .in("id", toRemind.map((r: any) => r.id));
+      results.reminded = toRemind.length;
+      logInfo("sweep.reminded", { count: toRemind.length });
+    }
+  }
+
+  return jsonResponse({ success: true, ...results });
+}
+
+// =============================================================
 // Admin approval handler (GET ?action=approve)
 // =============================================================
 
@@ -792,12 +851,24 @@ serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
 
   try {
-    const sb = createClient(SB_URL, SB_PUBLISHABLE);
+    const sb = createClient(SB_URL, SB_SERVICE);
     const url = new URL(req.url);
 
     // GET ?action=approve — admin approval
     if (req.method === "GET" && url.searchParams.get("action") === "approve") {
       return await handleApprove(sb, url);
+    }
+
+    // GET ?action=sweep&key=... — periodic maintenance (invoked by pg_cron):
+    //  1. recover requests stuck in "searching" (crashed mid-flight)
+    //  2. remind admin about "found" requests awaiting approval
+    if (req.method === "GET" && url.searchParams.get("action") === "sweep") {
+      const { data: sData } = await sb.rpc("get_settings_json");
+      const s = sData || {};
+      if (!s.sweep_key || url.searchParams.get("key") !== s.sweep_key) {
+        return jsonResponse({ error: "unauthorized" }, 401);
+      }
+      return await handleSweep(sb, s);
     }
 
     // POST — flight search

@@ -13,8 +13,9 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 
-const SB_URL = "https://stncskqjrmecjckxldvi.supabase.co";
-const SB_KEY = "sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I";
+const SB_URL = Deno.env.get("SUPABASE_URL") ?? "https://stncskqjrmecjckxldvi.supabase.co";
+// Service-role (auto-injected) — trusted server code, unaffected by RLS lockdown
+const SB_KEY = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "sb_publishable_8MkxUO2bv-j-19qulr6Ong_UnVY915I";
 
 const AIRPORT_NAMES: Record<string, string> = {
   TLV:'תל אביב',ETH:'אילת',LHR:'לונדון',LGW:'לונדון',CDG:'פריז',ORY:'פריז',
