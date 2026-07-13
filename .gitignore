@@ -1,2 +1,3 @@
 supabase-go.exe
 *.exe
+supabase/.temp/
