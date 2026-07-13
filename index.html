@@ -304,6 +304,7 @@ const Landing = ({go, price='249', vipPrice='299'}) => (
       <div style={{display:'flex',gap:12,justifyContent:'center',flexWrap:'wrap',maxWidth:600,margin:'0 auto 56px'}}>
         <button className="btn btn-p" onClick={()=>go('beat')} style={{width:'auto',padding:'14px 28px',fontSize:15,borderRadius:14}}>🎯 הכה את המחיר</button>
         <button className="btn btn-o" onClick={()=>go('research')} style={{width:'auto',padding:'14px 28px',fontSize:15,borderRadius:14}}>📊 דוח מחקר</button>
+        <button className="btn" onClick={()=>go('explore')} style={{width:'auto',padding:'14px 28px',fontSize:15,borderRadius:14,background:'linear-gradient(135deg,#06b6d4,#0891b2)',color:'#fff',border:'none'}}>🌍 לאן שהכי זול</button>
         <button className="btn" onClick={()=>go('vip')} style={{width:'auto',padding:'14px 28px',fontSize:15,borderRadius:14,background:'linear-gradient(135deg,#8b5cf6,#7c3aed)',color:'#fff',border:'none'}}>👑 VIP אישי</button>
       </div>
     </div>
