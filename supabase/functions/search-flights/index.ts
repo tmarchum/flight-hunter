@@ -22,7 +22,7 @@ const MANAGED_AGENTS_BETA = "managed-agents-2026-04-01";
 const MANAGED_AGENTS_DEADLINE_MS = 22_000; // hard cap to stay inside Edge CPU budget
 const MANAGED_AGENTS_POLL_MS = 1_500;
 const SERPAPI_TIMEOUT_MS = 15_000;
-const SKYSCANNER_TIMEOUT_MS = 15_000;
+const SKYSCANNER_TIMEOUT_MS = 28_000; // measured 20-23s in production — 15s was silently killing the engine
 const KIWI_TIMEOUT_MS = 15_000;
 
 // =============================================================
@@ -345,6 +345,49 @@ async function searchSerpApi(
     logError("serpapi", e, { from, to, date });
   }
   return out;
+}
+
+// True round-trip fare (Google type=1). Airlines often price RT packages
+// well below the sum of two one-ways — measured 11% on TLV↔LHR — so for
+// round-trip requests we fetch this in parallel and surface it when cheaper.
+async function searchSerpApiRoundTrip(
+  settings: any, request: any
+): Promise<{ price: number; airline: string; stops: number } | null> {
+  if (!settings.serpapi_key) return null;
+  try {
+    const params = new URLSearchParams({
+      engine: "google_flights",
+      departure_id: request.from_iata,
+      arrival_id: request.to_iata,
+      outbound_date: request.depart_date,
+      return_date: request.return_date,
+      type: "1", // round trip
+      adults: String(request.adults || 1),
+      children: String(request.children || 0),
+      currency: "USD",
+      api_key: settings.serpapi_key,
+    });
+    const resp = await fetchWithTimeout(`https://serpapi.com/search.json?${params}`, {
+      timeoutMs: SERPAPI_TIMEOUT_MS,
+    });
+    if (!resp.ok) return null;
+    const data = await resp.json();
+    const flights = [...(data.best_flights || []), ...(data.other_flights || [])]
+      .filter((f: any) => {
+        const cls = (f.flights?.[0]?.travel_class || "").toLowerCase();
+        return !cls.includes("business") && !cls.includes("first") && !cls.includes("premium");
+      });
+    const best = flights[0];
+    if (!best?.price) return null;
+    return {
+      price: best.price,
+      airline: best.flights?.[0]?.airline || "",
+      stops: Math.max(0, (best.flights?.length || 1) - 1),
+    };
+  } catch (e) {
+    logError("serpapi.roundtrip", e);
+    return null;
+  }
 }
 
 async function searchSkyscanner(
@@ -973,17 +1016,34 @@ serve(async (req) => {
             { from: request.from_iata, to: request.to_iata, date: request.depart_date, label: "הלוך" },
           ];
 
-      const searchResults = await Promise.all(
-        directions.map(async (dir) => {
-          const [serp, sky, kiwi] = await Promise.all([
-            searchSerpApi(settings, request, dir.from, dir.to, dir.date),
-            searchSkyscanner(settings, request, dir.from, dir.to, dir.date),
-            searchKiwi(settings, request, dir.from, dir.to, dir.date),
-          ]);
-          const raw = [...serp, ...sky, ...kiwi];
-          return { dir, raw, deduped: deduplicateAndSort(raw) };
-        })
-      );
+      const [searchResults, rtFare] = await Promise.all([
+        Promise.all(
+          directions.map(async (dir) => {
+            const [serp, sky, kiwi] = await Promise.all([
+              searchSerpApi(settings, request, dir.from, dir.to, dir.date),
+              searchSkyscanner(settings, request, dir.from, dir.to, dir.date),
+              searchKiwi(settings, request, dir.from, dir.to, dir.date),
+            ]);
+            const raw = [...serp, ...sky, ...kiwi];
+            return { dir, raw, deduped: deduplicateAndSort(raw) };
+          })
+        ),
+        // True round-trip package fare, in parallel (round trips only)
+        isRoundTrip ? searchSerpApiRoundTrip(settings, request) : Promise.resolve(null),
+      ]);
+
+      // Compare the RT package with the sum of the two cheapest one-ways
+      let rtNote = "";
+      if (rtFare) {
+        const owSum = searchResults.reduce((acc, dr) => acc + (dr.deduped[0]?.price_usd || 0), 0);
+        const bothDirectionsFound = searchResults.every((dr) => dr.deduped.length > 0);
+        if (bothDirectionsFound && rtFare.price < owSum) {
+          const saving = owSum - rtFare.price;
+          rtNote = `\n💡 *חבילת הלוך־ושוב מלאה: $${rtFare.price}* — ${rtFare.airline}` +
+            `${rtFare.stops === 0 ? " (ישירה)" : ` (${rtFare.stops} עצירות)`}\n` +
+            `   חיסכון $${saving} לעומת שני כרטיסים נפרדים ($${owSum})\n`;
+        }
+      }
 
       const allRaw = searchResults.flatMap((d) => d.raw);
       const allDeduped = searchResults.flatMap((d) => d.deduped);
@@ -1036,6 +1096,7 @@ serve(async (req) => {
           adminSummary += `המחיר שמצאנו (הלוך): $${outboundCheapest}\n`;
           adminSummary += `חיסכון: $${saving} (${savingPct}%)\n`;
           for (const dr of searchResults) adminSummary += buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date).admin;
+          if (rtNote) adminSummary += rtNote;
           adminSummary += `\n${engineStats}`;
 
           customerTeaser = `🎉 חדשות מעולות!\n\n`;
@@ -1045,6 +1106,7 @@ serve(async (req) => {
             customerTeaser += `\n🔄 *הלוך ושוב — הצעות לכל כיוון בנפרד:*\n`;
             for (const dr of searchResults) customerTeaser += buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date).teaser;
           }
+          if (rtNote) customerTeaser += rtNote;
           customerTeaser += `\nלקבלת כל הפרטים המלאים (חברה, שעות, מקור) — אשר תשלום.\n\n📋 מספר בקשה: ${requestId}`;
         } else {
           status = "not_found";
@@ -1074,6 +1136,7 @@ serve(async (req) => {
         adminSummary += `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n`;
         adminSummary += `👥 ${request.adults} מבוגרים${request.children ? " + " + request.children + " ילדים" : ""}\n`;
         for (const dr of searchResults) adminSummary += buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date).admin;
+        if (rtNote) adminSummary += rtNote;
         adminSummary += `\n${engineStats}`;
 
         customerTeaser =
@@ -1083,6 +1146,7 @@ serve(async (req) => {
           `📅 ${request.depart_date}${request.return_date ? " — " + request.return_date : ""}\n\n`;
         if (isRoundTrip) customerTeaser += `🔄 *הצעות לכל כיוון בנפרד:*\n`;
         for (const dr of searchResults) customerTeaser += buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date).teaser;
+        if (rtNote) customerTeaser += rtNote;
         customerTeaser += `\nלקבלת הדוח המלא עם חברות, שעות ומקורות — אשר תשלום.\n\n📋 מספר בקשה: ${requestId}`;
       }
 
@@ -1090,6 +1154,7 @@ serve(async (req) => {
       let customerFull = "";
       if (allDeduped.length > 0) {
         for (const dr of searchResults) customerFull += buildDirectionSummary(dr.deduped, dr.dir.label, dr.dir.from, dr.dir.to, dr.dir.date).full;
+        if (rtNote) customerFull += rtNote;
         customerFull += `\n🔗 *חפש והזמן ב:*\n• Google Flights: google.com/travel/flights\n• Skyscanner: skyscanner.com\n• Kiwi.com: kiwi.com\n`;
       }
 
@@ -1103,6 +1168,7 @@ serve(async (req) => {
           results: dr.deduped.slice(0, 5),
         })),
         cheapest_price: cheapest,
+        roundtrip_fare: rtFare,
         search_time: new Date().toISOString(),
         sources_searched: [
           settings.serpapi_key ? "Google Flights" : null,
