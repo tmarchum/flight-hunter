@@ -81,7 +81,12 @@ const DB = {
   // Insert with a client-generated id and no RETURNING — the anon role has
   // insert-only access, so we can't select the row back.
   async insertRequest(row) {
-    const id = crypto.randomUUID();
+    // crypto.randomUUID is missing on older browsers (e.g. iOS <15.4)
+    const id = (crypto.randomUUID && crypto.randomUUID()) ||
+      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = crypto.getRandomValues(new Uint8Array(1))[0] % 16;
+        return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
+      });
     const {error} = await sb.from('requests').insert([{...row, id}]);
     return {data: error ? null : {id}, error};
   },
@@ -677,7 +682,7 @@ const Admin = ({go}) => {
   const filtered = requests.filter(r =>
     tab==='all' ? true :
     tab==='pending' ? r.status==='pending' :
-    tab==='active' ? ['searching','found','sent_price','awaiting_payment'].includes(r.status) :
+    tab==='active' ? ['searching','found','awaiting_payment'].includes(r.status) :
     tab==='beat' ? r.type==='beat' :
     tab==='research' ? r.type==='research' :
     tab==='paid' ? ['paid','sent'].includes(r.status) : true
@@ -686,7 +691,7 @@ const Admin = ({go}) => {
   const stats = {
     total: requests.length,
     pending: requests.filter(r=>r.status==='pending').length,
-    active: requests.filter(r=>['searching','found','sent_price','awaiting_payment'].includes(r.status)).length,
+    active: requests.filter(r=>['searching','found','awaiting_payment'].includes(r.status)).length,
     paid: requests.filter(r=>['paid','sent'].includes(r.status)).length,
     revenue: requests.filter(r=>['paid','sent'].includes(r.status)).reduce((a,r)=>a+(r.amount_paid||parseInt(settings.service_price||'249')),0),
     today: requests.filter(r=>r.created_at?.startsWith(new Date().toISOString().slice(0,10))).length,
@@ -858,7 +863,7 @@ const Admin = ({go}) => {
             <button key={t.id} className={`tab ${tab===t.id?'tab-on':'tab-off'}`} onClick={()=>setTab(t.id)}>{t.l} ({
               t.id==='all'?requests.length:
               t.id==='pending'?requests.filter(r=>r.status==='pending').length:
-              t.id==='active'?requests.filter(r=>['searching','found','sent_price','awaiting_payment'].includes(r.status)).length:
+              t.id==='active'?requests.filter(r=>['searching','found','awaiting_payment'].includes(r.status)).length:
               t.id==='beat'?requests.filter(r=>r.type==='beat').length:
               t.id==='research'?requests.filter(r=>r.type==='research').length:
               requests.filter(r=>['paid','sent'].includes(r.status)).length
@@ -892,7 +897,7 @@ const Admin = ({go}) => {
                       <td style={{padding:'10px 14px'}}>
                         <div style={{display:'flex',gap:4}}>
                           {r.status==='pending' && <button className="btn btn-s" style={{background:'#3b82f620',color:'#3b82f6'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'searching');}}>🔍</button>}
-                          {['pending','searching','found','sent_price','awaiting_payment'].includes(r.status) && <button className="btn btn-s" style={{background:'#22c55e20',color:'#22c55e'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'paid');}}>💳</button>}
+                          {['pending','searching','found','awaiting_payment'].includes(r.status) && <button className="btn btn-s" style={{background:'#22c55e20',color:'#22c55e'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'paid');}}>💳</button>}
                           {r.status==='paid' && <button className="btn btn-s" style={{background:'#10b98120',color:'#10b981'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'sent');}}>✅</button>}
                           {r.status==='pending' && <button className="btn btn-s" style={{background:'#ef444420',color:'#ef4444'}} onClick={e=>{e.stopPropagation();setStatus(r.id,'not_found');}}>✗</button>}
                         </div>
@@ -957,11 +962,11 @@ const Admin = ({go}) => {
                   {s:'pending',l:'⏳ ממתין',c:'#f59e0b'},
                   {s:'searching',l:'🔍 בחיפוש',c:'#3b82f6'},
                   {s:'found',l:'🎯 נמצא',c:'#8b5cf6'},
-                  {s:'sent_price',l:'📨 נשלח מחיר',c:'#06b6d4'},
                   {s:'awaiting_payment',l:'💳 ממתין תשלום',c:'#f97316'},
                   {s:'paid',l:'✅ שולם',c:'#22c55e'},
                   {s:'sent',l:'📤 נשלח',c:'#10b981'},
                   {s:'not_found',l:'❌ לא נמצא',c:'#ef4444'},
+                  {s:'failed',l:'🛑 נכשל',c:'#ef4444'},
                 ].map(o=>(
                   <button key={o.s} onClick={()=>setStatus(sel.id,o.s)}
                     style={{fontSize:11,padding:'8px 6px',borderRadius:8,border:`1px solid ${sel.status===o.s?o.c:'#1e1e2e'}`,background:sel.status===o.s?o.c+'20':'#0a0a0f',color:sel.status===o.s?o.c:'#9ca3af',cursor:'pointer',fontFamily:'Heebo',fontWeight:600}}>

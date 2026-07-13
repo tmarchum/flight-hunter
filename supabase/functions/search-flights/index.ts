@@ -646,9 +646,12 @@ async function handleSweep(sb: any, settings: any): Promise<Response> {
   // 2. Expire dead approval-pending requests: the departure date already
   //    passed, so approving them would send stale prices for a flight in
   //    the past. Never remind about these — close them out.
+  //    VIP is excluded: its depart_date is a placeholder (form sets today);
+  //    the real dates live in the free-text notes.
   const { data: dead } = await sb.from("requests")
     .select("id")
     .in("status", ["found", "awaiting_payment"])
+    .neq("type", "vip")
     .lt("depart_date", today);
   if (dead && dead.length > 0) {
     await sb.from("requests").update({
@@ -669,7 +672,8 @@ async function handleSweep(sb: any, settings: any): Promise<Response> {
     .eq("status", "found")
     .lt("created_at", hourAgo)
     .gt("created_at", weekAgo)
-    .gte("depart_date", today)
+    // VIP depart_date is a placeholder — include VIPs regardless of it
+    .or(`depart_date.gte.${today},type.eq.vip`)
     .order("created_at", { ascending: true })
     .limit(10);
 
@@ -903,6 +907,28 @@ serve(async (req) => {
     const { data: request, error: reqErr } = await sb
       .from("requests").select("*").eq("id", requestId).single();
     if (reqErr || !request) return jsonResponse({ error: "request not found" }, 404);
+
+    // Re-trigger guard: the pipeline runs a request exactly once. A repeat
+    // POST on a processed id (customers have their id in every WhatsApp
+    // message) must not re-search, re-ack, or re-notify.
+    if (request.status !== "pending") {
+      return jsonResponse({ error: "already processed", status: request.status }, 409);
+    }
+
+    // Basic anti-abuse: max 3 requests per phone per 10 minutes. Protects
+    // API credits and prevents WhatsApp spam-by-proxy to arbitrary numbers.
+    const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
+    const { count: recentCount } = await sb.from("requests")
+      .select("id", { count: "exact", head: true })
+      .eq("whatsapp", request.whatsapp)
+      .gt("created_at", tenMinAgo)
+      .neq("id", requestId);
+    if ((recentCount ?? 0) >= 3) {
+      await sb.from("requests").update({
+        status: "failed", admin_notes: "rate limited: >3 requests in 10min from same phone",
+      }).eq("id", requestId);
+      return jsonResponse({ error: "rate limited" }, 429);
+    }
 
     // Validate
     const isVip = request.type === "vip";
