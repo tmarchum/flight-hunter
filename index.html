@@ -981,15 +981,23 @@ const Admin = ({go}) => {
             {/* Admin Approval Button — shown when status is 'found' */}
             {sel.status==='found' && <div style={{marginTop:16}}>
               <button className="btn btn-p" style={{background:'#22c55e',color:'#fff',marginBottom:8}} onClick={async()=>{
-                // Approve: send TEASER to customer via Edge Function approve link
+                // The Edge Function owns the approve flow: it builds the SUMIT
+                // link, sends the teaser, and sets status=awaiting_payment.
+                // confirm=yes is required — without it the endpoint only
+                // renders a preview page (link-preview protection).
                 try {
-                  await fetch(`${SB_URL}/functions/v1/search-flights?action=approve&request_id=${sel.id}`);
-                } catch(e){}
-                await setStatus(sel.id,'sent_price');
+                  const resp = await fetch(`${SB_URL}/functions/v1/search-flights?action=approve&request_id=${sel.id}&confirm=yes`);
+                  if (!resp.ok) throw new Error('HTTP '+resp.status);
+                  alert('✅ הטיזר וקישור התשלום נשלחו ללקוח');
+                } catch(e) {
+                  alert('שליחה נכשלה — נסה שוב או בדוק את הלוגים');
+                }
+                await load(); // pull the real status from the server
+                setSel(null);
               }}>
                 ✅ אשר ושלח ללקוח
               </button>
-              <p style={{fontSize:11,color:'#6b7280',textAlign:'center'}}>שולח טיזר ללקוח ב-WhatsApp (ללא מחירים — רק אחרי תשלום)</p>
+              <p style={{fontSize:11,color:'#6b7280',textAlign:'center'}}>שולח טיזר + קישור תשלום ללקוח ב-WhatsApp (פרטים מלאים — רק אחרי תשלום)</p>
             </div>}
           </div>}
         </div>
@@ -1118,7 +1126,7 @@ const PaymentSuccess = ({go}) => {
 
 const App = () => {
   const params = new URLSearchParams(window.location.search);
-  const initialPage = params.get('page') === 'payment-success' ? 'payment-success' : 'home';
+  const initialPage = ['payment-success','admin'].includes(params.get('page')) ? params.get('page') : 'home';
   const [page, setPage] = useState(initialPage);
   const [globalSettings, setGlobalSettings] = useState({});
   useEffect(()=>{ DB.getPublicSettings().then(setGlobalSettings); },[]);

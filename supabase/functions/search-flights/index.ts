@@ -627,7 +627,8 @@ function buildDirectionSummary(deduped: FlightResult[], dirLabel: string, fromIa
 // =============================================================
 
 async function handleSweep(sb: any, settings: any): Promise<Response> {
-  const results = { recovered: 0, reminded: 0 };
+  const results = { recovered: 0, expired: 0, reminded: 0 };
+  const today = new Date().toISOString().slice(0, 10);
 
   // 1. Recover stuck "searching" rows older than 10 minutes
   const tenMinAgo = new Date(Date.now() - 10 * 60_000).toISOString();
@@ -642,14 +643,33 @@ async function handleSweep(sb: any, settings: any): Promise<Response> {
     logInfo("sweep.recovered", { count: stuck.length });
   }
 
-  // 2. Remind admin about approval-pending requests older than 1 hour.
-  //    Re-remind at most once per 24h per request (tracked in reminded_at).
+  // 2. Expire dead approval-pending requests: the departure date already
+  //    passed, so approving them would send stale prices for a flight in
+  //    the past. Never remind about these — close them out.
+  const { data: dead } = await sb.from("requests")
+    .select("id")
+    .in("status", ["found", "awaiting_payment"])
+    .lt("depart_date", today);
+  if (dead && dead.length > 0) {
+    await sb.from("requests").update({
+      status: "failed",
+      admin_notes: "auto-expired: depart date passed before approval/payment",
+    }).in("id", dead.map((r: any) => r.id));
+    results.expired = dead.length;
+    logInfo("sweep.expired", { count: dead.length });
+  }
+
+  // 3. Remind admin about FRESH approval-pending requests (last 7 days,
+  //    older than 1 hour). Re-remind at most once per 24h per request.
   const hourAgo = new Date(Date.now() - 60 * 60_000).toISOString();
   const dayAgo = new Date(Date.now() - 24 * 3600_000).toISOString();
+  const weekAgo = new Date(Date.now() - 7 * 24 * 3600_000).toISOString();
   const { data: pending } = await sb.from("requests")
     .select("id, name, whatsapp, type, from_iata, to_iata, depart_date, cheapest_found, created_at, reminded_at")
     .eq("status", "found")
     .lt("created_at", hourAgo)
+    .gt("created_at", weekAgo)
+    .gte("depart_date", today)
     .order("created_at", { ascending: true })
     .limit(10);
 
@@ -658,6 +678,7 @@ async function handleSweep(sb: any, settings: any): Promise<Response> {
   );
 
   if (toRemind.length > 0 && settings.admin_whatsapp) {
+    const siteUrl = settings.site_url || "https://tmarchum.github.io/flight-hunter";
     let msg = `⏰ *תזכורת: ${toRemind.length} בקשות מחכות לאישורך!*\n\n`;
     for (const r of toRemind) {
       const age = Math.round((Date.now() - new Date(r.created_at).getTime()) / 3600_000);
@@ -666,8 +687,8 @@ async function handleSweep(sb: any, settings: any): Promise<Response> {
         : `✈️ ${heCity(r.from_iata)} → ${heCity(r.to_iata)} — ${r.name}`;
       if (r.cheapest_found) msg += ` (מ-$${r.cheapest_found})`;
       msg += ` — לפני ${age} שע'\n`;
-      msg += `   ✅ ${SB_URL}/functions/v1/search-flights?action=approve&request_id=${r.id.slice(0, 8)}\n`;
     }
+    msg += `\n📋 *לצפייה ואישור בדשבורד:*\n${siteUrl}/?page=admin\n`;
     msg += `\n_לקוחות מחכים — כל שעה שעוברת מורידה את הסיכוי לסגירה._\n_צייד טיסות ✈️_`;
     const sendRes = await sendWhatsApp(settings, settings.admin_whatsapp, msg);
     if (sendRes.ok) {
