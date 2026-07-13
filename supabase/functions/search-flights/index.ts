@@ -731,6 +731,8 @@ async function handleSweep(sb: any, settings: any): Promise<Response> {
       const age = Math.round((Date.now() - new Date(r.created_at).getTime()) / 3600_000);
       msg += r.type === "vip"
         ? `👑 VIP — ${r.name}`
+        : r.type === "explore"
+        ? `🌍 Explore מ-${heCity(r.from_iata)} — ${r.name}`
         : `✈️ ${heCity(r.from_iata)} → ${heCity(r.to_iata)} — ${r.name}`;
       if (r.cheapest_found) msg += ` (מ-$${r.cheapest_found})`;
       msg += ` — לפני ${age} שע'\n`;
@@ -780,9 +782,10 @@ async function handleApprove(sb: any, url: URL): Promise<Response> {
   // Step 1: confirmation page (so WhatsApp link previews don't auto-trigger)
   if (!confirmed) {
     const confirmUrl = `${SB_URL}/functions/v1/search-flights?action=approve&request_id=${reqId}&confirm=yes`;
-    const isVip = r.type === "vip";
-    const routeInfo = isVip
+    const routeInfo = r.type === "vip"
       ? `<p><b>סוג:</b> 👑 VIP</p><p><b>בקשה:</b> ${(r.notes || "").slice(0, 200)}</p>`
+      : r.type === "explore"
+      ? `<p><b>סוג:</b> 🌍 Explore — לאן שהכי זול</p><p><b>מ:</b> ${r.from_iata}</p><p><b>תאריך:</b> ${r.depart_date} | המראה ${r.depart_time_from || "?"}–${r.depart_time_to || "?"}</p>`
       : `<p><b>מסלול:</b> ${r.from_iata} → ${r.to_iata}</p><p><b>תאריך:</b> ${r.depart_date}${r.return_date ? " — " + r.return_date : ""}</p>`;
     return htmlResponse(
       `<html dir="rtl"><body style="font-family:sans-serif;text-align:center;padding:40px;background:#0a0a0f;color:#f0f0f5">
@@ -823,6 +826,16 @@ function validateRequest(r: any, isVip: boolean): string | null {
   if (!r.whatsapp || normalizeIsraeliPhone(r.whatsapp).length < 9) return "valid whatsapp required";
   if (!isValidEmail(r.email)) return "invalid email";
   if (isVip) return null; // VIP is free-text — skip route validation
+  if (r.type === "explore") {
+    // No destination; validate origin, date, and the departure-time window
+    if (!isValidIATA(r.from_iata)) return "invalid from_iata";
+    if (!isValidISODate(r.depart_date)) return "invalid depart_date";
+    if (!isFutureOrTodayDate(r.depart_date)) return "depart_date must be today or future";
+    const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+    if (r.depart_time_from && !hhmm.test(r.depart_time_from)) return "invalid depart_time_from";
+    if (r.depart_time_to && !hhmm.test(r.depart_time_to)) return "invalid depart_time_to";
+    return null;
+  }
   if (!isValidIATA(r.from_iata)) return "invalid from_iata";
   if (!isValidIATA(r.to_iata)) return "invalid to_iata";
   if (r.from_iata === r.to_iata) return "from and to must differ";
@@ -833,6 +846,193 @@ function validateRequest(r: any, isVip: boolean): string | null {
   if ((r.adults || 1) < 1 || (r.adults || 1) > 9) return "adults must be 1-9";
   if ((r.children || 0) < 0 || (r.children || 0) > 9) return "children must be 0-9";
   return null;
+}
+
+// =============================================================
+// Explore flow — "cheapest anywhere" from a fixed origin, filtered
+// by a departure-time window. Two stages:
+//   1. Skyscanner "everywhere" → candidate destinations (indicative)
+//   2. Real SerpApi search per top candidate → actual bookable price
+//      within the requested departure window (indicative prices are
+//      cheapest-anytime and wildly understate a specific date/time).
+// =============================================================
+
+interface ExploreResult {
+  code: string;
+  city: string;
+  price: number;
+  airline: string;
+  depart: string; // HH:MM
+  arrive: string; // HH:MM
+  stops: number;
+}
+
+// Stage 1: candidate destinations (country/city level, indicative price)
+async function exploreCandidates(
+  settings: any, from: string, date: string
+): Promise<{ code: string; city: string; indicative: number }[]> {
+  if (!settings.skyfare_key) return [];
+  try {
+    const qs = new URLSearchParams({
+      fromEntityId: from, departDate: date, adults: "1", currency: "USD",
+    });
+    const r = await fetchWithTimeout(
+      `https://flights-sky.p.rapidapi.com/flights/search-everywhere?${qs}`,
+      {
+        headers: {
+          "X-RapidAPI-Key": settings.skyfare_key,
+          "X-RapidAPI-Host": "flights-sky.p.rapidapi.com",
+        },
+        timeoutMs: 20_000,
+      }
+    );
+    if (!r.ok) { logError("explore.everywhere.http", `${r.status}`); return []; }
+    const d = await r.json();
+    const arr = d.data?.everywhereDestination?.results || [];
+    return arr
+      .filter((x: any) => x.type === "LOCATION" && x.content?.flightQuotes?.cheapest)
+      .map((x: any) => ({
+        code: x.content.location.skyCode,
+        city: x.content.location.name,
+        indicative: x.content.flightQuotes.cheapest.rawPrice,
+      }))
+      .sort((a: any, b: any) => a.indicative - b.indicative);
+  } catch (e) {
+    logError("explore.everywhere", e);
+    return [];
+  }
+}
+
+// Country skyCode → primary airport IATA (Skyscanner everywhere returns
+// countries; we probe the main gateway of each). Falls back to the code
+// itself when it's already an airport.
+const COUNTRY_TO_AIRPORT: Record<string, string> = {
+  CY: "LCA", IT: "FCO", GR: "ATH", BG: "SOF", AM: "EVN", UK: "LON", HU: "BUD",
+  PL: "WAW", SK: "BTS", RO: "OTP", AL: "TIA", LT: "VNO", ES: "BCN", RS: "BEG",
+  GE: "TBS", DE: "BER", FR: "PAR", NL: "AMS", AT: "VIE", CZ: "PRG", PT: "LIS",
+  BE: "BRU", CH: "ZRH", HR: "ZAG", ME: "TGD", MK: "SKP", MD: "KIV", TR: "IST",
+  AE: "DXB", GB: "LON",
+};
+
+async function handleExplore(sb: any, settings: any, request: any): Promise<Response> {
+  const from = request.from_iata || "TLV";
+  const date = request.depart_date;
+  const winFrom = request.depart_time_from || "00:00";
+  const winTo = request.depart_time_to || "23:59";
+  const budget = request.budget_usd || null;
+  const toMin = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return h * 60 + m; };
+  const winStart = toMin(winFrom), winEnd = toMin(winTo);
+
+  // Immediate ack
+  await sendWhatsApp(settings, request.whatsapp,
+    `שלום ${request.name} 👋\n\n✅ בקשת ה-"לאן שהכי זול" שלך התקבלה!\n\n` +
+    `✈️ מ-${heCity(from)}\n📅 ${date}\n🕐 המראה ${winFrom}–${winTo}\n` +
+    (budget ? `💰 תקציב: עד $${budget}\n` : "") +
+    `\nאנחנו סורקים עשרות יעדים ומסננים לפי שעות הטיסה שלך.\nנעדכן ברגע שנסיים! 🌍\n_צייד טיסות ✈️_`);
+
+  // Stage 1
+  const candidates = await exploreCandidates(settings, from, date);
+  logInfo("explore.candidates", { count: candidates.length });
+
+  // Stage 2: real per-destination search on top candidates (cap to protect API budget)
+  const TOP_N = 12;
+  const seen = new Set<string>();
+  const probes = candidates.slice(0, TOP_N).map((c) => {
+    const iata = COUNTRY_TO_AIRPORT[c.code] || c.code;
+    if (seen.has(iata) || iata.length !== 3) return null;
+    seen.add(iata);
+    return { iata, city: c.city };
+  }).filter(Boolean) as { iata: string; city: string }[];
+
+  const found: ExploreResult[] = [];
+  await Promise.all(probes.map(async (p) => {
+    const legs = await searchSerpApi(settings, request, from, p.iata, date);
+    // searchSerpApi already filters economy + unknown airlines
+    const inWindow = legs
+      .filter((f) => {
+        const dep = f.departure_time?.slice?.(11, 16);
+        if (!dep) return false;
+        const mins = toMin(dep);
+        return mins >= winStart && mins <= winEnd;
+      })
+      .filter((f) => !budget || f.price_usd <= budget)
+      .sort((a, b) => a.price_usd - b.price_usd);
+    const best = inWindow[0];
+    if (best) {
+      found.push({
+        code: p.iata, city: p.city, price: best.price_usd, airline: best.airline,
+        depart: best.departure_time?.slice?.(11, 16) || "",
+        arrive: best.arrival_time?.slice?.(11, 16) || "",
+        stops: best.stops,
+      });
+    }
+  }));
+  found.sort((a, b) => a.price - b.price);
+  const top = found.slice(0, 6);
+
+  const fmtLine = (r: ExploreResult, i: number) =>
+    `${i + 1}. *${heCity(r.code)}* — $${r.price} | ${r.airline} | המראה ${r.depart}${r.arrive ? "→" + r.arrive : ""} | ${r.stops === 0 ? "ישיר" : r.stops + " עצירות"}`;
+
+  let status = "found";
+  let adminSummary = "", customerTeaser = "", customerFull = "";
+
+  if (top.length === 0) {
+    status = "not_found";
+    adminSummary = `🌍 Explore — לא נמצאו טיסות בחלון ${winFrom}-${winTo} ב-${date} מ-${from}${budget ? ` עד $${budget}` : ""}.\nנסרקו ${candidates.length} יעדים, ${probes.length} נבדקו לעומק.`;
+    customerTeaser =
+      `שלום ${request.name} 👋\n\n` +
+      `סרקנו עשרות יעדים מ-${heCity(from)} ב-${date}, אבל לא מצאנו טיסה בחלון ההמראה ${winFrom}–${winTo}${budget ? ` בתקציב $${budget}` : ""}.\n\n` +
+      `💡 נסה להרחיב את חלון השעות, את התאריך, או את התקציב.\nללא חיוב 🔄\n\n📋 מספר בקשה: ${request.id}\n_צייד טיסות ✈️_`;
+  } else {
+    adminSummary = `🌍 *Explore — ${heCity(from)}, ${date}, המראה ${winFrom}-${winTo}*\n`;
+    adminSummary += `נסרקו ${candidates.length} יעדים, ${probes.length} נבדקו לעומק, ${found.length} עם טיסה בחלון.\n\n`;
+    adminSummary += top.map(fmtLine).join("\n");
+
+    // Teaser: show destinations + "from $X" but not the full per-dest breakdown
+    customerTeaser =
+      `🌍 מצאנו לך יעדים!\n\n` +
+      `✈️ מ-${heCity(from)} | 📅 ${date} | 🕐 המראה ${winFrom}–${winTo}\n\n` +
+      `היעד הכי זול: *${heCity(top[0].code)}* מ-*$${top[0].price}*\n` +
+      `סה"כ ${top.length} יעדים בטווח שלך, מ-$${top[0].price} עד $${top[top.length - 1].price}.\n\n` +
+      `לרשימה המלאה עם חברות, שעות ומחירים לכל יעד — אשר תשלום.\n\n📋 מספר בקשה: ${request.id}`;
+
+    customerFull =
+      `🌍 *${top.length} היעדים הזולים ביותר מ-${heCity(from)}*\n📅 ${date} | 🕐 המראה ${winFrom}–${winTo}\n\n` +
+      top.map(fmtLine).join("\n") +
+      `\n\n🔗 *חפש והזמן ב:*\n• Google Flights: google.com/travel/flights\n• Skyscanner: skyscanner.com\n`;
+  }
+
+  await sb.from("requests").update({
+    status,
+    cheapest_found: top[0]?.price || null,
+    ai_response: {
+      type: "explore",
+      admin_summary: adminSummary,
+      customer_teaser: customerTeaser,
+      customer_full: customerFull,
+      results: top,
+      candidates_scanned: candidates.length,
+      probed: probes.length,
+      search_time: new Date().toISOString(),
+    },
+  }).eq("id", request.id);
+
+  const adminApproval = settings.admin_approval === "true";
+
+  if (status === "not_found") {
+    await sendWhatsApp(settings, request.whatsapp, customerTeaser);
+    if (settings.admin_whatsapp) await sendWhatsApp(settings, settings.admin_whatsapp,
+      `⚠️ *Explore ללא תוצאות*\n👤 ${request.name} (${request.whatsapp})\n\n${adminSummary}\n_צייד טיסות ✈️_`);
+  } else if (adminApproval && settings.admin_whatsapp) {
+    const approveUrl = `${SB_URL}/functions/v1/search-flights?action=approve&request_id=${request.id.slice(0, 8)}`;
+    await sendWhatsApp(settings, settings.admin_whatsapp,
+      `🔔 *בקשת Explore מחכה לאישורך!*\n👤 ${request.name} (${request.whatsapp})\n\n${adminSummary}\n\n` +
+      `✅ *לאישור ושליחה ללקוח:*\n${approveUrl}\n\n_צייד טיסות ✈️_`);
+  } else if (settings.green_instance && settings.green_token) {
+    await sendTeaserWithPayment(sb, settings, request, customerTeaser);
+  }
+
+  return jsonResponse({ success: true, status, type: "explore", results_count: top.length });
 }
 
 // =============================================================
@@ -975,6 +1175,7 @@ serve(async (req) => {
 
     // Validate
     const isVip = request.type === "vip";
+    const isExplore = request.type === "explore";
     const validationErr = validateRequest(request, isVip);
     if (validationErr) {
       await sb.from("requests").update({
@@ -988,6 +1189,7 @@ serve(async (req) => {
     // Wrap remaining work so errors mark status=failed instead of leaving "searching" forever
     try {
       if (isVip) return await handleVip(sb, settings, request);
+      if (isExplore) return await handleExplore(sb, settings, request);
 
       // Immediate ack to customer (used to be sent client-side; moved here so
       // the Green token stays server-side). VIP has its own ack in handleVip.

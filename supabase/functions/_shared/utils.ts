@@ -54,6 +54,7 @@ export const AIRPORT_NAMES: Record<string, string> = {
   ATH: "אתונה", SKG: "סלוניקי", HER: "כרתים", CHQ: "חניה", RHO: "רודוס",
   JMK: "מיקונוס", JTR: "סנטוריני", CFU: "קורפו", ZTH: "זקינתוס", KGS: "קוס",
   LCA: "לרנקה", PFO: "פאפוס", IST: "איסטנבול", SAW: "איסטנבול סבחא", AYT: "אנטליה",
+  EVN: "ירוואן", TBS: "טביליסי", KIV: "קישינב", BTS: "ברטיסלבה", TIA: "טירנה", SKP: "סקופיה",
   ESB: "אנקרה", ADB: "איזמיר", DLM: "דאלמן", BJV: "בודרום",
   SSH: "שארם א-שייח", HRG: "הורגדה", CAI: "קהיר",
   // Germany / Austria / Switzerland

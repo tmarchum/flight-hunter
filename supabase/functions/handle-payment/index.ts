@@ -198,6 +198,9 @@ serve(async (req) => {
         msg += `👑 *שירות VIP*\n\n`;
         if (customerFull) msg += customerFull;
         msg += `\nסוכן אישי ייצור איתך קשר בהקדם עם כל הפרטים וההמלצות.\n`;
+      } else if (request.type === "explore") {
+        // Explore: customerFull already carries the full destination list + header
+        msg += customerFull || `\n⚠️ לא נמצאו יעדים. צור קשר לקבלת עזרה.\n`;
       } else {
         msg += `הנה *הפרטים המלאים* שלך:\n\n`;
         msg += `✈️ *${heCity(request.from_iata)} → ${heCity(request.to_iata)}*\n`;

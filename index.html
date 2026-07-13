@@ -269,6 +269,8 @@ const TypeBadge = ({type}) => type==='vip'
   ? <span style={{background:'#8b5cf620',color:'#8b5cf6',padding:'3px 10px',borderRadius:8,fontSize:11,fontWeight:700}}>👑 VIP</span>
   : type==='beat'
   ? <span style={{background:'#3b82f620',color:'#3b82f6',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>הכה מחיר</span>
+  : type==='explore'
+  ? <span style={{background:'#06b6d420',color:'#06b6d4',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>🌍 לאן שזול</span>
   : <span style={{background:'#8b5cf620',color:'#8b5cf6',padding:'3px 10px',borderRadius:20,fontSize:12,fontWeight:600}}>מחקר</span>;
 
 const fmtDate = d => d ? new Date(d).toLocaleDateString('he-IL') : '—';
@@ -381,6 +383,19 @@ const Landing = ({go, price='249', vipPrice='299'}) => (
         <p style={{color:'#9ca3af',margin:'0 0 16px',fontSize:14,lineHeight:1.6}}>בקשה חופשית — סוכן אישי מטפל בכל דבר שצריך.</p>
         {['סוכן אנושי צמוד','בקשות מורכבות','טיפול פרטני מלא'].map(t=><div key={t} style={{display:'flex',alignItems:'center',gap:8,fontSize:13,marginBottom:8}}><span style={{color:'#8b5cf6',fontSize:14}}>✓</span><span>{t}</span></div>)}
         <button className="btn" style={{marginTop:16,padding:'12px 20px',fontSize:15,background:'linear-gradient(135deg,#8b5cf6,#7c3aed)',color:'#fff',width:'100%',boxShadow:'0 4px 20px #8b5cf640'}}>טיפול VIP</button>
+      </div>
+
+      <div className="card landing-card" style={{padding:'32px 28px',cursor:'pointer',border:'2px solid #06b6d450',position:'relative',boxShadow:'0 0 40px #06b6d410'}} onClick={()=>go('explore')}>
+        <div style={{position:'absolute',top:16,left:16,background:'#06b6d415',color:'#06b6d4',padding:'4px 12px',borderRadius:20,fontSize:11,fontWeight:700,border:'1px solid #06b6d440'}}>חדש</div>
+        <div style={{fontSize:40,marginBottom:12,marginTop:8}}>🌍</div>
+        <h2 style={{fontSize:22,fontWeight:900,margin:'0 0 4px'}}>לאן שהכי זול</h2>
+        <div style={{margin:'8px 0 12px',background:'linear-gradient(135deg,#06b6d420,#06b6d408)',borderRadius:14,padding:'14px 18px',border:'1px solid #06b6d430'}}>
+          <div style={{fontSize:42,fontWeight:900,lineHeight:1}}><span style={{background:'linear-gradient(90deg,#06b6d4,#67e8f9,#06b6d4)',backgroundSize:'200% auto',WebkitBackgroundClip:'text',WebkitTextFillColor:'transparent',backgroundClip:'text',animation:'shimmer 3s linear infinite'}}>₪{price}</span></div>
+          <div style={{fontSize:13,color:'#9ca3af',marginTop:4}}>רק אם הצלחנו</div>
+        </div>
+        <p style={{color:'#9ca3af',margin:'0 0 16px',fontSize:14,lineHeight:1.6}}>לא משנה לאן — רק תאריך ושעה. נמצא את היעדים הכי זולים.</p>
+        {['סריקת עשרות יעדים','סינון לפי שעת המראה','6 יעדים מדורגים'].map(t=><div key={t} style={{display:'flex',alignItems:'center',gap:8,fontSize:13,marginBottom:8}}><span style={{color:'#06b6d4',fontSize:14}}>✓</span><span>{t}</span></div>)}
+        <button className="btn" style={{marginTop:16,padding:'12px 20px',fontSize:15,background:'linear-gradient(135deg,#06b6d4,#0891b2)',color:'#fff',width:'100%',boxShadow:'0 4px 20px #06b6d440'}}>לאן שהכי זול</button>
       </div>
     </div>
 
@@ -1105,6 +1120,92 @@ const VipForm = ({go, vipPrice='299'}) => {
   );
 };
 
+// ============ EXPLORE FORM (cheapest anywhere) ============
+const ExploreForm = ({go, price='249'}) => {
+  const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
+  const [fromDisplay, setFromDisplay] = useState('תל אביב');
+  const [f, setF] = useState({
+    name:'', whatsapp:'', email:'', from_iata:'TLV',
+    depart_date:'', time_from:'06:00', time_to:'23:59', budget_usd:'',
+  });
+  const u = (k,v) => setF(p=>({...p,[k]:v}));
+
+  useEffect(()=>{
+    try { const s=JSON.parse(localStorage.getItem('fh_user')||'{}');
+      if(s.name||s.whatsapp||s.email) setF(p=>({...p,name:s.name||p.name,whatsapp:s.whatsapp||p.whatsapp,email:s.email||p.email})); } catch(e){}
+  },[]);
+
+  const submit = async () => {
+    setLoading(true);
+    let phone = (f.whatsapp||'').replace(/[^0-9]/g,'');
+    if (phone.startsWith('972')) phone = '0' + phone.slice(3);
+    if (!phone.startsWith('0') && phone.length === 9) phone = '0' + phone;
+    const {data,error} = await DB.insertRequest({
+      type:'explore', status:'pending',
+      name:f.name, whatsapp:phone, email:f.email||null,
+      from_iata:f.from_iata, to_iata:'ANY',
+      depart_date:f.depart_date, is_one_way:true, adults:1, children:0,
+      depart_time_from:f.time_from, depart_time_to:f.time_to,
+      budget_usd: f.budget_usd?parseInt(f.budget_usd):null,
+    });
+    if(!error){
+      try { localStorage.setItem('fh_user', JSON.stringify({name:f.name,whatsapp:phone,email:f.email})); } catch(e){}
+      try { await fetch(`${SB_URL}/functions/v1/search-flights`, {method:'POST',headers:{'Content-Type':'application/json','Authorization':`Bearer ${SB_KEY}`},body:JSON.stringify({id:data?.id})}); } catch(e){}
+    }
+    setLoading(false);
+    if(!error) setDone(true); else alert('שגיאה — נסה שוב');
+  };
+
+  if (done) return (
+    <div className="min-h-screen flex items-center justify-center p-4">
+      <div className="card p-10 text-center max-w-md fade-in">
+        <div className="text-6xl mb-4">🌍</div>
+        <h1 className="text-2xl font-black mb-3">יוצאים לסרוק את העולם!</h1>
+        <p className="text-muted mb-6">אנחנו בודקים עשרות יעדים ומסננים לפי שעות הטיסה שלך. נעדכן ב-WhatsApp בהקדם.</p>
+        <button className="btn btn-p" onClick={()=>go('home')}>חזור לדף הבית</button>
+      </div>
+    </div>
+  );
+
+  const valid = f.name && f.whatsapp && f.from_iata && f.depart_date && f.time_from < f.time_to;
+
+  return (
+    <div style={{minHeight:'100vh',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div className="card fade-in" style={{maxWidth:500,width:'100%',padding:36}}>
+        <button onClick={()=>go('home')} style={{background:'none',border:'none',color:'#6b7280',cursor:'pointer',fontFamily:'Heebo',fontSize:14,marginBottom:16}}>→ חזור</button>
+        <div style={{textAlign:'center',marginBottom:24}}>
+          <div style={{fontSize:48,marginBottom:8}}>🌍</div>
+          <h1 style={{fontSize:26,fontWeight:900,margin:'0 0 4px'}}>לאן שהכי זול</h1>
+          <p style={{color:'#9ca3af',fontSize:14}}>לא צריך לבחור יעד — רק תאריך וחלון שעות, ונמצא לך לאן הכי זול לטוס</p>
+        </div>
+
+        <div style={{marginBottom:10}}>
+          <CitySearch label="מאיפה ממריאים" value={f.from_iata} displayValue={fromDisplay} onChange={(iata,display)=>{u('from_iata',iata);setFromDisplay(display);}} placeholder="תל אביב..." />
+        </div>
+        <div style={{marginBottom:10}}><span className="lbl">תאריך יציאה</span><input type="date" value={f.depart_date} onChange={e=>u('depart_date',e.target.value)}/></div>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div><span className="lbl">המראה מ-</span><input type="time" value={f.time_from} onChange={e=>u('time_from',e.target.value)}/></div>
+          <div><span className="lbl">עד</span><input type="time" value={f.time_to} onChange={e=>u('time_to',e.target.value)}/></div>
+        </div>
+        <div style={{marginBottom:16}}><span className="lbl">תקציב מקסימלי לכיוון ($, אופציונלי)</span><input type="number" value={f.budget_usd} onChange={e=>u('budget_usd',e.target.value)} placeholder="למשל 400"/></div>
+
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div><span className="lbl">שם מלא *</span><input autoComplete="name" value={f.name} onChange={e=>u('name',e.target.value)} placeholder="ישראל ישראלי"/></div>
+          <div><span className="lbl">WhatsApp *</span><input autoComplete="tel" type="tel" value={f.whatsapp} onChange={e=>u('whatsapp',e.target.value)} placeholder="050-1234567"/></div>
+        </div>
+        <div style={{marginBottom:20}}><span className="lbl">אימייל (אופציונלי)</span><input autoComplete="email" type="email" value={f.email} onChange={e=>u('email',e.target.value)} placeholder="you@email.com"/></div>
+
+        <button className="btn" disabled={!valid||loading} onClick={submit}
+          style={{width:'100%',padding:'14px',fontSize:16,background:'linear-gradient(135deg,#06b6d4,#0891b2)',color:'#fff',border:'none',borderRadius:12,cursor:'pointer',opacity:(!valid||loading)?0.5:1}}>
+          {loading ? '⏳ שולח...' : '🌍 מצא לי לאן לטוס'}
+        </button>
+        <p style={{textAlign:'center',fontSize:12,color:'#6b7280',marginTop:12}}>₪{price} — רק אם מצאנו. תוצאות ב-WhatsApp</p>
+      </div>
+    </div>
+  );
+};
+
 const PaymentSuccess = ({go}) => {
   const params = new URLSearchParams(window.location.search);
   const reqId = params.get('request_id') || '';
@@ -1142,6 +1243,7 @@ const App = () => {
     beat: <FlightForm type="beat" go={setPage} price={price}/>,
     research: <FlightForm type="research" go={setPage} price={price}/>,
     vip: <VipForm go={setPage} vipPrice={vipPrice}/>,
+    explore: <ExploreForm go={setPage} price={price}/>,
     admin: <Admin go={setPage}/>,
     'payment-success': <PaymentSuccess go={setPage}/>,
   };
