@@ -117,6 +117,26 @@ const DB = {
   async saveAdminSetting(password, key, value) {
     const {error} = await sb.rpc('set_admin_setting', {p_password: password, p_key: key, p_value: value});
     if (error) throw error;
+  },
+  // ---- Nudnik price-watches (password-gated CRUD; the cloud engine reads them) ----
+  async getNudnikWatches(password) {
+    const {data,error} = await sb.rpc('get_nudnik_watches', {p_password: password});
+    if (error) throw error;
+    return data || [];
+  },
+  async createNudnikWatch(password, patch) {
+    const {data,error} = await sb.rpc('create_nudnik_watch', {p_password: password, p_patch: patch});
+    if (error) throw error;
+    return data;
+  },
+  async setNudnikWatch(password, id, patch) {
+    const {data,error} = await sb.rpc('set_nudnik_watch', {p_password: password, p_id: id, p_patch: patch});
+    if (error) throw error;
+    return data;
+  },
+  async deleteNudnikWatch(password, id) {
+    const {error} = await sb.rpc('delete_nudnik_watch', {p_password: password, p_id: id});
+    if (error) throw error;
   }
 };
 
@@ -621,9 +641,11 @@ const Admin = ({go}) => {
   const [adminPw, setAdminPw] = useState(sessionStorage.getItem('fh_admin_pw') || '');
   const [authed, setAuthed] = useState(!!sessionStorage.getItem('fh_admin_pw'));
   const [pw, setPw] = useState('');
-  const [view, setView] = useState('requests'); // requests | settings
+  const [view, setView] = useState('requests'); // requests | settings | nudnik
   const [requests, setRequests] = useState([]);
   const [settings, setSettings] = useState({});
+  const [watches, setWatches] = useState([]);
+  const [nw, setNw] = useState({label:'',origin:'TLV',dest:'',outbound:'',ret:'',adults:6,target:'',fri:true});
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState('all');
   const [sel, setSel] = useState(null);
@@ -633,9 +655,10 @@ const Admin = ({go}) => {
     if (!adminPw) return;
     setLoading(true);
     try {
-      const [reqs, sets] = await Promise.all([DB.getRequests(adminPw), DB.getAdminSettings(adminPw)]);
+      const [reqs, sets, wl] = await Promise.all([DB.getRequests(adminPw), DB.getAdminSettings(adminPw), DB.getNudnikWatches(adminPw).catch(()=>[])]);
       setRequests(reqs);
       setSettings(sets);
+      setWatches(wl);
     } catch (e) {
       // Password no longer valid (rotated server-side) — kick back to login.
       sessionStorage.removeItem('fh_admin_pw');
@@ -695,6 +718,28 @@ const Admin = ({go}) => {
     }
   };
 
+  // ---- Nudnik handlers ----
+  const csv = s => (s||'').split(',').map(x=>x.trim()).filter(Boolean);
+  const createWatch = async () => {
+    if(!nw.dest || !nw.outbound || !nw.ret || !nw.target){ alert('מלא יעד, תאריכי הלוך+חזור, ומספר וואטסאפ'); return; }
+    try {
+      await DB.createNudnikWatch(adminPw, {
+        label: nw.label || (nw.origin+'→'+nw.dest), origin: nw.origin.toUpperCase(), dest: nw.dest.toUpperCase(),
+        outbound_dates: csv(nw.outbound), return_dates: csv(nw.ret),
+        adults: +nw.adults, target_chat: nw.target, friday_morning_only: nw.fri, active: true,
+      });
+      setNw({label:'',origin:'TLV',dest:'',outbound:'',ret:'',adults:6,target:'',fri:true});
+      load();
+    } catch(e){ alert('יצירה נכשלה: '+(e.message||e)); }
+  };
+  const patchLocalWatch = (id,field,val) => setWatches(ws=>ws.map(w=>w.id===id?{...w,[field]:val}:w));
+  const saveWatch = async (id, patch) => {
+    try { await DB.setNudnikWatch(adminPw, id, patch); }
+    catch(e){ alert('עדכון נכשל: '+(e.message||e)); load(); }
+  };
+  const toggleWatch = async (w) => { patchLocalWatch(w.id,'active',!w.active); await saveWatch(w.id,{active:!w.active}); };
+  const delWatch = async (id) => { if(confirm('למחוק את הנודניק?')){ try{ await DB.deleteNudnikWatch(adminPw,id); load(); }catch(e){ alert('מחיקה נכשלה'); } } };
+
   const filtered = requests.filter(r =>
     tab==='all' ? true :
     tab==='pending' ? r.status==='pending' :
@@ -725,6 +770,88 @@ const Admin = ({go}) => {
     </div>
   );
 
+  // NUDNIK VIEW (personal price-watches; the cloud engine runs them 3x/day)
+  if(view==='nudnik') return (
+    <div style={{minHeight:'100vh'}}>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'14px 24px',borderBottom:'1px solid #1e1e2e'}}>
+        <div style={{display:'flex',alignItems:'center',gap:12}}>
+          <span style={{fontSize:18,fontWeight:900}}>✈️ צייד טיסות</span>
+          <span style={{background:'#f5a62320',color:'#f5a623',padding:'3px 10px',borderRadius:8,fontSize:12}}>מנהל</span>
+        </div>
+        <div style={{display:'flex',gap:8,alignItems:'center'}}>
+          <button className="tab tab-off" onClick={()=>setView('requests')}>📋 בקשות</button>
+          <button className="tab tab-on">🔔 נודניק</button>
+          <button className="tab tab-off" onClick={()=>setView('settings')}>⚙️ הגדרות</button>
+          <button onClick={load} style={{background:'#1e1e2e',border:'none',color:'#9ca3af',padding:'8px 12px',borderRadius:8,cursor:'pointer',fontFamily:'Heebo',fontSize:12}}>🔄</button>
+        </div>
+      </div>
+      <div style={{maxWidth:820,margin:'28px auto',padding:'0 16px'}}>
+        <h2 style={{fontSize:24,fontWeight:900,marginBottom:6}}>🔔 נודניק — מעקבי מחירים</h2>
+        <p style={{fontSize:13,color:'#6b7280',marginBottom:20}}>כל נודניק פעיל נסרק אוטומטית בענן 3×/יום ושולח וואטסאפ עם המחיר הזול ביותר (ומתריע על שיא חדש). התאריכים בפורמט YYYY-MM-DD, מופרדים בפסיק.</p>
+
+        {/* CREATE */}
+        <div className="card" style={{padding:16,marginBottom:20,border:'1px solid #f5a62340'}}>
+          <div style={{fontWeight:800,fontSize:15,marginBottom:12}}>➕ נודניק חדש</div>
+          <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:10}}>
+            <div style={{flex:'1 1 90px'}}><label style={{fontSize:11,color:'#6b7280'}}>מוצא</label><input value={nw.origin} onChange={e=>setNw(s=>({...s,origin:e.target.value}))} placeholder="TLV" style={{fontSize:13}}/></div>
+            <div style={{flex:'1 1 90px'}}><label style={{fontSize:11,color:'#6b7280'}}>יעד</label><input value={nw.dest} onChange={e=>setNw(s=>({...s,dest:e.target.value}))} placeholder="LCA" style={{fontSize:13}}/></div>
+            <div style={{flex:'1 1 70px'}}><label style={{fontSize:11,color:'#6b7280'}}>נוסעים</label><input type="number" value={nw.adults} onChange={e=>setNw(s=>({...s,adults:e.target.value}))} style={{fontSize:13}}/></div>
+          </div>
+          <label style={{fontSize:11,color:'#6b7280'}}>תאריכי הלוך (פסיק)</label>
+          <input value={nw.outbound} onChange={e=>setNw(s=>({...s,outbound:e.target.value}))} placeholder="2026-09-13" style={{fontSize:13,marginBottom:8}}/>
+          <label style={{fontSize:11,color:'#6b7280'}}>תאריכי חזור (פסיק)</label>
+          <input value={nw.ret} onChange={e=>setNw(s=>({...s,ret:e.target.value}))} placeholder="2026-09-17, 2026-09-18" style={{fontSize:13,marginBottom:8}}/>
+          <div style={{display:'flex',gap:10,flexWrap:'wrap',alignItems:'flex-end'}}>
+            <div style={{flex:'1 1 160px'}}><label style={{fontSize:11,color:'#6b7280'}}>וואטסאפ (972...)</label><input value={nw.target} onChange={e=>setNw(s=>({...s,target:e.target.value}))} placeholder="972501234567" style={{fontSize:13}}/></div>
+            <div style={{flex:'1 1 120px'}}><label style={{fontSize:11,color:'#6b7280'}}>שם (אופציונלי)</label><input value={nw.label} onChange={e=>setNw(s=>({...s,label:e.target.value}))} placeholder="חופשה" style={{fontSize:13}}/></div>
+          </div>
+          <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13,margin:'12px 0'}}>
+            <input type="checkbox" checked={nw.fri} onChange={e=>setNw(s=>({...s,fri:e.target.checked}))} style={{width:'auto'}}/>
+            חזור בשישי — בוקר בלבד (לפני 12:00)
+          </label>
+          <button className="btn btn-p" onClick={createWatch}>צור נודניק</button>
+        </div>
+
+        {/* LIST */}
+        {watches.length===0 ?
+          <div className="card" style={{padding:40,textAlign:'center'}}><div style={{fontSize:36,marginBottom:8}}>🔕</div><div style={{color:'#6b7280'}}>אין נודניקים עדיין — צור אחד למעלה</div></div> :
+          watches.map(w => (
+            <div key={w.id} className="card" style={{padding:16,marginBottom:12,border:w.active?'1px solid #22c55e30':'1px solid #1e1e2e',opacity:w.active?1:0.6}}>
+              <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:12}}>
+                <div style={{fontWeight:800,fontSize:15}}>{w.label||(w.origin+'→'+w.dest)} <span style={{fontSize:12,color:'#6b7280'}}>#{w.id}</span></div>
+                <div style={{display:'flex',gap:8,alignItems:'center'}}>
+                  <button onClick={()=>toggleWatch(w)} style={{padding:'6px 14px',borderRadius:8,border:'none',cursor:'pointer',fontFamily:'Heebo',fontWeight:700,fontSize:12,background:w.active?'#22c55e':'#1e1e2e',color:w.active?'#000':'#6b7280'}}>{w.active?'פעיל':'מושהה'}</button>
+                  <button onClick={()=>delWatch(w.id)} style={{padding:'6px 10px',borderRadius:8,border:'none',cursor:'pointer',fontFamily:'Heebo',fontSize:12,background:'#ef444420',color:'#ef4444'}}>🗑️</button>
+                </div>
+              </div>
+              <div style={{display:'flex',gap:10,flexWrap:'wrap',marginBottom:8}}>
+                <div style={{flex:'1 1 80px'}}><label style={{fontSize:11,color:'#6b7280'}}>מוצא</label><input value={w.origin||''} onChange={e=>patchLocalWatch(w.id,'origin',e.target.value)} onBlur={e=>saveWatch(w.id,{origin:e.target.value.toUpperCase()})} style={{fontSize:13}}/></div>
+                <div style={{flex:'1 1 80px'}}><label style={{fontSize:11,color:'#6b7280'}}>יעד</label><input value={w.dest||''} onChange={e=>patchLocalWatch(w.id,'dest',e.target.value)} onBlur={e=>saveWatch(w.id,{dest:e.target.value.toUpperCase()})} style={{fontSize:13}}/></div>
+                <div style={{flex:'1 1 60px'}}><label style={{fontSize:11,color:'#6b7280'}}>נוסעים</label><input type="number" value={w.adults||6} onChange={e=>patchLocalWatch(w.id,'adults',e.target.value)} onBlur={e=>saveWatch(w.id,{adults:+e.target.value})} style={{fontSize:13}}/></div>
+              </div>
+              <label style={{fontSize:11,color:'#6b7280'}}>הלוך</label>
+              <input value={(w.outbound_dates||[]).join(', ')} onChange={e=>patchLocalWatch(w.id,'outbound_dates',csv(e.target.value))} onBlur={()=>saveWatch(w.id,{outbound_dates:w.outbound_dates})} style={{fontSize:13,marginBottom:8}}/>
+              <label style={{fontSize:11,color:'#6b7280'}}>חזור</label>
+              <input value={(w.return_dates||[]).join(', ')} onChange={e=>patchLocalWatch(w.id,'return_dates',csv(e.target.value))} onBlur={()=>saveWatch(w.id,{return_dates:w.return_dates})} style={{fontSize:13,marginBottom:8}}/>
+              <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
+                <div style={{flex:'1 1 160px'}}><label style={{fontSize:11,color:'#6b7280'}}>וואטסאפ</label><input value={w.target_chat||''} onChange={e=>patchLocalWatch(w.id,'target_chat',e.target.value)} onBlur={e=>saveWatch(w.id,{target_chat:e.target.value})} style={{fontSize:13}}/></div>
+              </div>
+              <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13,margin:'10px 0 0'}}>
+                <input type="checkbox" checked={!!w.friday_morning_only} onChange={e=>{patchLocalWatch(w.id,'friday_morning_only',e.target.checked);saveWatch(w.id,{friday_morning_only:e.target.checked});}} style={{width:'auto'}}/>
+                חזור בשישי — בוקר בלבד
+              </label>
+              <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid #1e1e2e',fontSize:12,color:'#9ca3af',display:'flex',gap:16,flexWrap:'wrap'}}>
+                <span>🏆 שיא: <b style={{color:'#f5a623'}}>{w.best_price?('₪'+Math.round(w.best_price).toLocaleString()):'—'}</b></span>
+                <span>מחיר אחרון: {w.last_price?('₪'+Math.round(w.last_price).toLocaleString()):'—'}</span>
+                <span>נבדק: {w.last_run?new Date(w.last_run).toLocaleString('he-IL'):'טרם'}</span>
+              </div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  );
+
   // SETTINGS VIEW
   if(view==='settings') return (
     <div style={{minHeight:'100vh'}}>
@@ -735,6 +862,7 @@ const Admin = ({go}) => {
         </div>
         <div style={{display:'flex',gap:8}}>
           <button className="tab tab-off" onClick={()=>setView('requests')}>📋 בקשות</button>
+          <button className="tab tab-off" onClick={()=>setView('nudnik')}>🔔 נודניק</button>
           <button className="tab tab-on">⚙️ הגדרות</button>
         </div>
       </div>
@@ -849,6 +977,7 @@ const Admin = ({go}) => {
         </div>
         <div style={{display:'flex',gap:8,alignItems:'center'}}>
           <button className="tab tab-on">📋 בקשות</button>
+          <button className="tab tab-off" onClick={()=>setView('nudnik')}>🔔 נודניק</button>
           <button className="tab tab-off" onClick={()=>setView('settings')}>⚙️ הגדרות</button>
           <button onClick={load} style={{background:'#1e1e2e',border:'none',color:'#9ca3af',padding:'8px 12px',borderRadius:8,cursor:'pointer',fontFamily:'Heebo',fontSize:12}}>🔄</button>
           <button onClick={()=>{sessionStorage.removeItem('fh_admin');setAuthed(false);}} style={{background:'none',border:'none',color:'#6b7280',cursor:'pointer',fontFamily:'Heebo',fontSize:12}}>יציאה</button>
