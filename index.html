@@ -645,7 +645,7 @@ const Admin = ({go}) => {
   const [requests, setRequests] = useState([]);
   const [settings, setSettings] = useState({});
   const [watches, setWatches] = useState([]);
-  const [nw, setNw] = useState({label:'',origin:'TLV',dest:'',outbound:'',ret:'',adults:6,target:'',fri:true});
+  const [nw, setNw] = useState({label:'',origin:'TLV',dest:'',outbound:'',ret:'',adults:6,target:'',fri:true,interval:480});
   const [loading, setLoading] = useState(false);
   const [tab, setTab] = useState('all');
   const [sel, setSel] = useState(null);
@@ -719,6 +719,7 @@ const Admin = ({go}) => {
   };
 
   // ---- Nudnik handlers ----
+  const FREQ = [[60,'כל שעה'],[180,'כל 3 שעות'],[360,'כל 6 שעות'],[480,'3× ביום'],[720,'2× ביום'],[1440,'פעם ביום']];
   const csv = s => (s||'').split(',').map(x=>x.trim()).filter(Boolean);
   const createWatch = async () => {
     if(!nw.dest || !nw.outbound || !nw.ret || !nw.target){ alert('מלא יעד, תאריכי הלוך+חזור, ומספר וואטסאפ'); return; }
@@ -726,9 +727,10 @@ const Admin = ({go}) => {
       await DB.createNudnikWatch(adminPw, {
         label: nw.label || (nw.origin+'→'+nw.dest), origin: nw.origin.toUpperCase(), dest: nw.dest.toUpperCase(),
         outbound_dates: csv(nw.outbound), return_dates: csv(nw.ret),
-        adults: +nw.adults, target_chat: nw.target, friday_morning_only: nw.fri, active: true,
+        adults: +nw.adults, target_chat: nw.target, friday_morning_only: nw.fri,
+        interval_minutes: +nw.interval, active: true,
       });
-      setNw({label:'',origin:'TLV',dest:'',outbound:'',ret:'',adults:6,target:'',fri:true});
+      setNw({label:'',origin:'TLV',dest:'',outbound:'',ret:'',adults:6,target:'',fri:true,interval:480});
       load();
     } catch(e){ alert('יצירה נכשלה: '+(e.message||e)); }
   };
@@ -809,6 +811,10 @@ const Admin = ({go}) => {
             <input type="checkbox" checked={nw.fri} onChange={e=>setNw(s=>({...s,fri:e.target.checked}))} style={{width:'auto'}}/>
             חזור בשישי — בוקר בלבד (לפני 12:00)
           </label>
+          <label style={{fontSize:11,color:'#6b7280'}}>תדירות סריקה</label>
+          <select value={nw.interval} onChange={e=>setNw(s=>({...s,interval:+e.target.value}))} style={{fontSize:13,marginBottom:12}}>
+            {FREQ.map(([m,l])=><option key={m} value={m}>{l}</option>)}
+          </select>
           <button className="btn btn-p" onClick={createWatch}>צור נודניק</button>
         </div>
 
@@ -836,10 +842,18 @@ const Admin = ({go}) => {
               <div style={{display:'flex',gap:10,flexWrap:'wrap'}}>
                 <div style={{flex:'1 1 160px'}}><label style={{fontSize:11,color:'#6b7280'}}>וואטסאפ</label><input value={w.target_chat||''} onChange={e=>patchLocalWatch(w.id,'target_chat',e.target.value)} onBlur={e=>saveWatch(w.id,{target_chat:e.target.value})} style={{fontSize:13}}/></div>
               </div>
-              <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13,margin:'10px 0 0'}}>
-                <input type="checkbox" checked={!!w.friday_morning_only} onChange={e=>{patchLocalWatch(w.id,'friday_morning_only',e.target.checked);saveWatch(w.id,{friday_morning_only:e.target.checked});}} style={{width:'auto'}}/>
-                חזור בשישי — בוקר בלבד
-              </label>
+              <div style={{display:'flex',gap:14,flexWrap:'wrap',alignItems:'center',marginTop:10}}>
+                <label style={{display:'flex',alignItems:'center',gap:8,fontSize:13}}>
+                  <input type="checkbox" checked={!!w.friday_morning_only} onChange={e=>{patchLocalWatch(w.id,'friday_morning_only',e.target.checked);saveWatch(w.id,{friday_morning_only:e.target.checked});}} style={{width:'auto'}}/>
+                  חזור בשישי — בוקר בלבד
+                </label>
+                <div style={{display:'flex',alignItems:'center',gap:6}}>
+                  <span style={{fontSize:12,color:'#6b7280'}}>⏱️ תדירות:</span>
+                  <select value={w.interval_minutes||480} onChange={e=>{const v=+e.target.value;patchLocalWatch(w.id,'interval_minutes',v);saveWatch(w.id,{interval_minutes:v});}} style={{fontSize:12,width:'auto',padding:'6px 8px'}}>
+                    {FREQ.map(([m,l])=><option key={m} value={m}>{l}</option>)}
+                  </select>
+                </div>
+              </div>
               <div style={{marginTop:10,paddingTop:10,borderTop:'1px solid #1e1e2e',fontSize:12,color:'#9ca3af',display:'flex',gap:16,flexWrap:'wrap'}}>
                 <span>🏆 שיא: <b style={{color:'#f5a623'}}>{w.best_price?('₪'+Math.round(w.best_price).toLocaleString()):'—'}</b></span>
                 <span>מחיר אחרון: {w.last_price?('₪'+Math.round(w.last_price).toLocaleString()):'—'}</span>
