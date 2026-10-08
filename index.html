@@ -3,7 +3,71 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>צייד טיסות ✈️</title>
+  <title>צייד טיסות — מוצאים לך טיסה זולה יותר, משלמים רק אם הצלחנו</title>
+  <meta name="description" content="AI וסוכני נסיעות מומחים מוצאים את הטיסה הזולה ביותר. דוח מחקר טיסות 149 ₪, הכה את המחיר 149 ₪, לאן שהכי זול 149 ₪, טיפול VIP אישי 399 ₪. 1,200+ לקוחות, 2.1 מיליון ₪ נחסכו, חיסכון ממוצע 487 ₪. מענה תוך כשעה בוואטסאפ.">
+  <link rel="canonical" href="https://tmarchum.github.io/flight-hunter/">
+
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="he_IL">
+  <meta property="og:site_name" content="צייד טיסות">
+  <meta property="og:url" content="https://tmarchum.github.io/flight-hunter/">
+  <meta property="og:title" content="צייד טיסות — משלמים רק אם הצלחנו">
+  <meta property="og:description" content="מצאתם מחיר לטיסה? נמצא זול יותר. חיסכון ממוצע 487 ₪ ללקוח, מענה תוך כשעה בוואטסאפ. לא הצלחנו — לא משלמים.">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="צייד טיסות — משלמים רק אם הצלחנו">
+  <meta name="twitter:description" content="מצאתם מחיר לטיסה? נמצא זול יותר. חיסכון ממוצע 487 ₪ ללקוח. לא הצלחנו — לא משלמים.">
+
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "Service",
+    "name": "צייד טיסות",
+    "serviceType": "איתור טיסות בזול",
+    "url": "https://tmarchum.github.io/flight-hunter/",
+    "areaServed": { "@type": "Country", "name": "IL" },
+    "provider": { "@type": "Organization", "name": "צייד טיסות" },
+    "hasOfferCatalog": {
+      "@type": "OfferCatalog",
+      "name": "מוצרי צייד טיסות",
+      "itemListElement": [
+        { "@type": "Offer", "price": "149", "priceCurrency": "ILS",
+          "itemOffered": { "@type": "Service", "name": "הכה את המחיר",
+            "description": "מצאתם מחיר? נמצא זול יותר. משלמים רק אם הצלחנו." } },
+        { "@type": "Offer", "price": "149", "priceCurrency": "ILS",
+          "itemOffered": { "@type": "Service", "name": "דוח מחקר טיסות",
+            "description": "5 הדילים הטובים ביותר עם המלצה אישית. משלמים רק אם הצלחנו." } },
+        { "@type": "Offer", "price": "149", "priceCurrency": "ILS",
+          "itemOffered": { "@type": "Service", "name": "לאן שהכי זול",
+            "description": "רק תאריך ושעה — ואנחנו מוצאים 6 יעדים מדורגים." } },
+        { "@type": "Offer", "price": "399", "priceCurrency": "ILS",
+          "itemOffered": { "@type": "Service", "name": "טיפול VIP אישי",
+            "description": "סוכן אנושי צמוד לבקשות מורכבות." } }
+      ]
+    }
+  }
+  </script>
+
+  <!-- Meta Pixel -->
+  <script>
+    !function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;
+    n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window,
+    document,'script','https://connect.facebook.net/en_US/fbevents.js');
+    fbq('init', '962827229635232');
+    fbq('track', 'PageView');
+  </script>
+  <noscript><img height="1" width="1" style="display:none"
+    src="https://www.facebook.com/tr?id=962827229635232&ev=PageView&noscript=1" alt=""></noscript>
+
+  <!-- GA4 -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-NX04S0H5HC"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments)}
+    gtag('js', new Date());
+    gtag('config', 'G-NX04S0H5HC');
+  </script>
   <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@300;400;500;700;900&display=swap" rel="stylesheet">
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
@@ -501,6 +565,14 @@ const FlightForm = ({type, go, price='249'}) => {
     };
     const {data,error} = await DB.insertRequest(row);
     if (!error) {
+      // Conversion. There are no wa.me links to hook here — a saved request IS
+      // the lead — so report it with the product so each one can be optimised
+      // separately. Wrapped: a blocked tracker must never break a submission.
+      try {
+        const price = type === 'vip' ? 399 : 149;
+        if (window.fbq)  fbq('track', 'Lead', { content_name: type, value: price, currency: 'ILS' });
+        if (window.gtag) gtag('event', 'generate_lead', { method: type, value: price, currency: 'ILS' });
+      } catch(e){}
       // Save personal details for auto-fill next time
       try { localStorage.setItem('fh_user', JSON.stringify({name:f.name, whatsapp:phone, email:f.email})); } catch(e){}
       // Trigger the search Edge Function. It handles the customer ack,
